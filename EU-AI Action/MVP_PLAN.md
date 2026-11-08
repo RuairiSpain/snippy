@@ -52,9 +52,9 @@ The brief's MVP is: collector (Agent 365, Copilot Studio, Purview), per-agent fi
 
 **Not built in the MVP**: multi-tenant onboarding, billing, SSO, customer-managed keys, the Copilot Studio runtime webhook.
 
-## 5. Reuse from this repository
+## 5. Reuse from the Snippy sample
 
-Snippy is an Azure Functions (Python) app with Durable Functions, Cosmos DB, Azure OpenAI, MCP tool triggers and `azd` + Bicep infrastructure. That is close to the platform layer the brief describes.
+This repository is a placeholder. The Snippy code is independent of the new project, and the project will move to its own repository later. All new work lives in the `EU-AI Action/` folder, which has no imports from the rest of the repo, so it can be moved as a unit. Snippy is used here only as a source of patterns to copy. It is an Azure Functions (Python) app with Durable Functions, Cosmos DB, Azure OpenAI, MCP tool triggers and `azd` + Bicep infrastructure. That is close to the platform layer the brief describes.
 
 | Brief component | Snippy asset | Work needed |
 |---|---|---|
@@ -64,7 +64,7 @@ Snippy is an Azure Functions (Python) app with Durable Functions, Cosmos DB, Azu
 | API and MCP server | `@app.route` and `@app.mcp_tool_trigger` in `src/function_app.py` | New tools: `list_agents`, `get_compliance_file`, `generate_document`, `approve_document`. |
 | Infra and deployment | `infra/main.bicep`, `azure.yaml`, `infra/app/app-registration.bicep` | Add Key Vault, an Entra app registration with read-only Graph/Dataverse permissions, Static Web App for the portal. |
 
-The snippet-specific code (`tools/vector_search.py`, snippet routes) should be removed or left untouched in a separate path. Suggested new layout: `src/collector/`, `src/rules/` (YAML), `src/engine/` (applicability, facts), `src/documents/` (Jinja2 templates in `es/` and `en/`, renderers), `src/api/`.
+Do not modify the Snippy code. Copy the patterns into the new folder. Layout inside `EU-AI Action/`: `src/collector/`, `src/rules/` (YAML), `src/engine/` (applicability, facts), `src/documents/` (Jinja2 templates in `es/` and `en/`, renderers), `src/api/`, `infra/`. The asset paths in the table above refer to the Snippy files to copy from.
 
 ## 6. Design decisions for the MVP
 
@@ -96,8 +96,26 @@ The whole MVP depends on being able to read these things programmatically. Check
 2. Can Copilot Studio agent definitions, including greeting topic text and channel configuration, be read through Dataverse with an app-only token? Which roles are required?
 3. Can Purview audit records for agents be queried with an app-only identity, and at what latency?
 4. What does Purview DSPM for AI expose through an API, if anything? If nothing, RoPA data categories come from sensitivity labels and knowledge-source metadata only.
-5. Does Compliance Manager have any public API to upload evidence or update improvement actions? I am not aware of one. If not, the "write back" step in the brief becomes file export or a SharePoint/Purview upload workaround, which changes the v1 estimate.
+5. Does Compliance Manager have any public API to upload evidence or update improvement actions? A search of Microsoft Learn on 8 November 2026 found none; see section 8a. Confirm in the Graph reference before relying on this.
 6. Admin consent and least-privilege permission set a customer security team will accept.
+
+## 8a. Compliance Manager: no database access, and the supported write-back route
+
+Compliance Manager is a Microsoft-hosted service inside Purview. Its data sits in Microsoft-managed storage that customers cannot reach. There is no customer-accessible database, storage account or export feed to read from or write to, and attempting direct access would not be supported. Do not plan around it.
+
+What Microsoft documents (searched 8 November 2026; I found no Graph endpoint for it, which is not proof that none exists):
+
+- **Bulk Excel round trip.** [Export improvement actions to Excel, edit them, and upload the file](https://learn.microsoft.com/en-us/purview/compliance-manager-update-actions) from the Assessments or Improvement actions page. It can update status, notes and test results and can add evidence for actions tested in another system. Limits: only actions your organisation manages (not Microsoft-managed actions), and the action must already belong to an assessment. Control mappings cannot be changed this way.
+- **Evidence files and links** are added per action on the Evidence tab, in the portal ([improvement actions](https://learn.microsoft.com/purview/compliance-manager-improvement-actions)).
+- I found no documented evidence-size limits and no confirmation of a PDF export of assessment reports.
+
+Consequences for the design:
+
+1. **Reading signals does not need Compliance Manager.** The product reads the underlying sources directly (Dataverse, Graph, Purview audit, Defender, Foundry). Compliance Manager's own scores and assessment status are not needed as inputs for the MVP.
+2. **Write-back becomes a generated bundle, not an API call.** For each assessment, produce (a) the Excel file in Compliance Manager's own import format, with implementation status, test status and notes filled in, and (b) the evidence files (the generated DOCX/PDF) with a link list. A person uploads these in the portal. This is a semi-manual step but matches Microsoft's documented process.
+3. **Do not use UI automation** (scripted portal clicks) in a product. It breaks on portal changes, and automated access of this kind is likely to conflict with Microsoft's terms. Raise any such option with the Microsoft partner team first.
+4. **Alternative systems of record** (Vanta, OneTrust) are separate integrations; check their public APIs in the same spike.
+5. **Plan impact.** Treat write-back as an export feature (size S to M), not an integration (L). The pitch claim that evidence is "pushed back" into Compliance Manager should be reworded to "exported in Compliance Manager's import format" until an API is confirmed. Ask Microsoft's Purview partner or product contacts whether a Graph API is planned. Because of your employment, route any such contact through the clearance in section 2.
 
 ## 9. Go/no-go criteria for the MVP
 
@@ -117,7 +135,7 @@ Sizes: S under 1 person-month, M 1 to 3, L 3 to 6, XL over 6. Estimates are mine
 | Stage (brief timing) | Items | Engineering size | Main difficulty |
 |---|---|---|---|
 | v1 (months 5 to 9) | DPIA pack, oversight record, worker notice, AI Act and GDPR incident drafts | M each, L together | Legal content per language, and works-council rules that differ by country |
-| v1 | Compliance Manager write-back | S to XL, unknown | Depends on spike 5. If no API exists this is a workaround, not an integration. Vanta and OneTrust APIs exist but each is a separate integration. |
+| v1 | Compliance Manager write-back | S to M as Excel/evidence bundle export (section 8a); XL if only UI automation were possible, which is not recommended | No API found. Vanta and OneTrust each need their own integration. |
 | v1 | Multi-tenant SaaS, Marketplace listing (managed app for collector, SaaS offer, private offers) | L | Marketplace certification, tenant isolation, billing/metering, customer onboarding with admin consent |
 | v1 | Teams tasks for human routing | M | Bot or Adaptive Card flows, identity mapping |
 | v2 (months 10 to 15) | Foundry and Agent Governance Toolkit evidence | M to L | Public-preview APIs with expected breaking changes |
