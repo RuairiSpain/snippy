@@ -267,7 +267,7 @@ Multi-tenant self-service onboarding, billing, Marketplace packaging, SSO beyond
 | 1 | Folder name | `eu-ai-action` (no spaces). Done. |
 | 2 | Dev tenant | Available. |
 | 3 | Subscription, region and other deployment inputs | All parameterised in `.env.example` (section 15); no values are hard-coded in Bicep, code or CI. |
-| 4 | Counsel for rule and template review | Open. Options are in section 16. |
+| 4 | Counsel for rule and template review | Boutique AI/data protection firm or independent privacy lawyer, fixed-fee engagement (section 16). Specific person or firm still to be chosen. |
 | 5 | Portal | Build the minimal static portal in M5. |
 
 ## 15. Configuration
