@@ -1,0 +1,27 @@
+{
+  "agent_id": "agent-no-owner",
+  "name": "Unowned Prototype",
+  "dataverse": {
+    "bot": {
+      "botid": "agent-no-owner",
+      "name": "Unowned Prototype",
+      "schemaname": "cr_agent-no-owner",
+      "authenticationmode": 2,
+      "language": 1033,
+      "createdon": "2026-09-01T09:00:00Z",
+      "modifiedon": "2026-10-20T15:30:00Z",
+      "statecode": 0
+    },
+    "components": [
+      {
+        "name": "Instructions",
+        "schemaname": "cr_agent.gpt.default",
+        "componenttype": 15,
+        "content": "kind: GptComponentMetadata\ninstructions: \"Answer questions.\"\n"
+      }
+    ],
+    "channels": [
+      "MsTeams"
+    ]
+  }
+}

@@ -1,0 +1,13 @@
+- id: GDPR-30-ROPA
+  regulation: GDPR
+  article: "Art. 30"
+  applies_from: 2018-05-25
+  role: controller
+  version: 1
+  applies_when:
+    all: []
+  check: null
+  evidence: [knowledgeSources, connectors, sensitivityLabels, dataCategories, securityObserved]
+  document: ropa-entry
+  source_citation: "Regulation (EU) 2016/679, Art. 30(1)"
+  reviewed_by: ""

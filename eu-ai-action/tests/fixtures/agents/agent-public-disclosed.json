@@ -1,0 +1,56 @@
+{
+  "agent_id": "agent-public-disclosed",
+  "name": "Atencion al cliente web",
+  "dataverse": {
+    "bot": {
+      "botid": "agent-public-disclosed",
+      "name": "Atencion al cliente web",
+      "schemaname": "cr_agent-public-disclosed",
+      "authenticationmode": 1,
+      "language": 3082,
+      "createdon": "2026-09-01T09:00:00Z",
+      "modifiedon": "2026-10-20T15:30:00Z",
+      "statecode": 0
+    },
+    "components": [
+      {
+        "name": "Conversation Start",
+        "schemaname": "cr_agent.topic.ConversationStart",
+        "componenttype": 9,
+        "content": "kind: AdaptiveDialog\nbeginDialog:\n  kind: OnConversationStart\n  actions:\n    - kind: SendActivity\n      activity: \"Hola, soy un asistente de inteligencia artificial. ¿En qué puedo ayudarte?\"\n"
+      },
+      {
+        "name": "Instructions",
+        "schemaname": "cr_agent.gpt.default",
+        "componenttype": 15,
+        "content": "kind: GptComponentMetadata\ninstructions: \"Answer questions.\"\n"
+      },
+      {
+        "name": "Customer FAQ",
+        "schemaname": "cr_agent.knowledge.Customer FAQ",
+        "componenttype": 16,
+        "content": "kind: KnowledgeSourceConfiguration\nsource:\n  kind: SharePointSearchSource\n  site: https://contoso.sharepoint.com/sites/faq\n"
+      }
+    ],
+    "channels": [
+      "DirectLine"
+    ]
+  },
+  "registry": {
+    "owner": {
+      "displayName": "Ana Ruiz"
+    },
+    "sponsor": {
+      "displayName": "Luis Mora"
+    },
+    "lastActivity": "2026-11-05T10:00:00Z"
+  },
+  "purview": {
+    "labels": [
+      {
+        "source": "Customer FAQ",
+        "label": "General"
+      }
+    ]
+  }
+}

@@ -1,0 +1,48 @@
+{
+  "agent_id": "agent-order-status",
+  "name": "Order Status Agent",
+  "dataverse": {
+    "bot": {
+      "botid": "agent-order-status",
+      "name": "Order Status Agent",
+      "schemaname": "cr_agent-order-status",
+      "authenticationmode": 1,
+      "language": 3082,
+      "createdon": "2026-09-01T09:00:00Z",
+      "modifiedon": "2026-10-20T15:30:00Z",
+      "statecode": 0
+    },
+    "components": [
+      {
+        "name": "Conversation Start",
+        "schemaname": "cr_agent.topic.ConversationStart",
+        "componenttype": 9,
+        "content": "kind: AdaptiveDialog\nbeginDialog:\n  kind: OnConversationStart\n  actions:\n    - kind: SendActivity\n      activity: \"Soy un asistente virtual de pedidos.\"\n"
+      },
+      {
+        "name": "Instructions",
+        "schemaname": "cr_agent.gpt.default",
+        "componenttype": 15,
+        "content": "kind: GptComponentMetadata\ninstructions: \"Answer questions.\"\n"
+      },
+      {
+        "name": "Orders API",
+        "schemaname": "cr_agent.action.Orders API",
+        "componenttype": 9,
+        "content": "kind: ConnectorAction\nconnector: Orders API\n"
+      }
+    ],
+    "channels": [
+      "Website"
+    ]
+  },
+  "registry": {
+    "owner": {
+      "displayName": "Ana Ruiz"
+    },
+    "sponsor": {
+      "displayName": "Luis Mora"
+    },
+    "lastActivity": "2026-11-05T10:00:00Z"
+  }
+}

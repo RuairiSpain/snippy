@@ -3,6 +3,23 @@
 Companion to `MVP_PLAN.md` (scope, go/no-go criteria, commercial assessment). This file is the build plan.
 Status: draft, 8 November 2026. Microsoft API details are assumptions until milestone M1 confirms them; they are marked **[verify]**.
 
+## Build status (8 November 2026)
+
+| Milestone | State |
+|---|---|
+| M0 setup | Scaffold, CI, settings, 8 fixture agents done. **Not done:** the real dev tenant, seeded Copilot Studio agents, Azure deployment. |
+| M1 spikes | Scripts written (`spikes/run_spikes.py`). **Not run**: needs tenant credentials. `docs/spike-results.md` is a blank template. |
+| M2 collector and facts | Facts, provenance, disclosure detector done and tested. Dataverse, Graph and Purview clients written from assumed APIs and **untested against a live tenant**. |
+| M3 rule engine | Done and tested for the 3 rules. Counsel review not done (`reviewed_by` empty). |
+| M4 documents | 3 documents x ES/EN, DOCX/PDF/MD, versioning, stale detection, workflow, audit done and tested. Templates not reviewed by counsel. Azure OpenAI path tested with a fake client only. |
+| M5 API, MCP, portal | HTTP handlers, tenant authorisation, durable scan and MCP tools written; portal tested in a browser against the dev server. Hosted behaviour (Functions host, Easy Auth, MCP) **not run**. |
+| M6 pilots | **Not started**: needs a deployment, real tenants and customers. Bicep written but not validated. |
+
+Deviations from the plan below: the Python package is `eu_ai_action/` at the project root (not `src/`); HTTP routes are all
+under `/api/tenants/{tenant_id}/...`; regeneration is `POST .../agents/{agent_id}/generate`; MCP tools do not expose approval
+and run for `TARGET_TENANT_ID` only; the Art. 50(1) rule reports `unknown` (not `pass`) when the greeting wording is only
+"virtual assistant", pending counsel's view.
+
 ## 1. Goal and definition of done
 
 Connect one Microsoft tenant, inventory its Copilot Studio agents, and produce for each agent: an Art. 50(1) disclosure check, a register entry and a GDPR Art. 30 record-of-processing entry, as signed-off, versioned DOCX/PDF documents in Spanish and English, plus a readiness score.

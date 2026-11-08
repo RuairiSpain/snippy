@@ -1,0 +1,39 @@
+# {{ title }}
+
+{{ banner }}
+
+## Agente
+
+| Agente | {{ f.agent_name }} |
+| Responsable | {{ f.owner }} |
+| Canales | {{ f.channels }} |
+| Autenticación | {{ f.auth_mode }} |
+| Finalidad de negocio | {{ f.business_purpose }} |
+
+## Qué hace el agente
+
+{{ f.agent_description }}
+
+## Resultado de la verificación
+
+{% if raw.check_result == "pass" -%}
+**Resultado: información presente.** El mensaje inicial del agente informa al usuario de que interactúa con un sistema de IA.
+{%- elif raw.check_result == "fail" -%}
+**Resultado: información ausente.** No se encontró en el mensaje inicial del agente ningún texto que informe al usuario de que interactúa con un sistema de IA.
+{%- else -%}
+**Resultado: no concluyente.** El mensaje inicial no existe o su redacción puede no indicar con claridad que el usuario interactúa con un sistema de IA. Debe revisarlo una persona.
+{%- endif %}
+
+| Mensaje inicial encontrado | {{ f.greeting_text }} |
+| Texto detectado | {{ f.disclosure_match }} |
+
+## Redacción sugerida
+
+Si el resultado no es "información presente", se propone la siguiente redacción para su aprobación por el responsable del agente y el área jurídica:
+
+- "Estás hablando con un asistente de inteligencia artificial, no con una persona."
+- "You are chatting with an AI assistant, not a person."
+
+## Base
+
+Reglamento (UE) 2024/1689, artículo 50, apartado 1: los proveedores garantizarán que los sistemas de IA destinados a interactuar directamente con personas físicas informen a estas de que están interactuando con un sistema de IA, salvo que resulte evidente. Este registro es una verificación técnica de la configuración del agente y no afirma que la organización cumpla el Reglamento.

@@ -1,0 +1,25 @@
+# Patterns that indicate the agent tells the user they are talking to an AI system (Art. 50(1)).
+# strong: counsel-reviewable wording that clearly says AI / bot. weak: wording that may not meet Art. 50(1) alone.
+# Prefer a false "unknown" to a false "pass": add patterns only with a test in tests/unit/test_facts.py.
+strong:
+  en:
+    - '\b(i am|i''m|this is)\s+an?\s+(ai|artificial[- ]intelligence)\b'
+    - '\bai[- ](assistant|agent|powered|generated|chatbot|bot)\b'
+    - '\bartificial intelligence\b'
+    - '\b(i am|i''m)\s+an?\s+(chat)?bot\b'
+    - '\bpowered by ai\b'
+  es:
+    - '\bsoy\s+(un|una)\s+(asistente|agente|chatbot|bot)\s+(de\s+)?(ia|inteligencia artificial)\b'
+    - '\binteligencia artificial\b'
+    - '\b(asistente|agente|chatbot)\s+de\s+ia\b'
+    - '\bsoy\s+un\s+(chat)?bot\b'
+    - '\bgenerad[oa]s?\s+por\s+ia\b'
+weak:
+  en:
+    - '\bvirtual assistant\b'
+    - '\bautomated assistant\b'
+    - '\bdigital assistant\b'
+  es:
+    - '\basistente virtual\b'
+    - '\basistente automatizado\b'
+    - '\basistente digital\b'

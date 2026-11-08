@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>EU-AI Action</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>EU-AI Action</h1>
+  <nav>
+    <a href="#/">Agents</a>
+    <a href="#/tasks">Tasks <span id="task-count" class="badge" hidden></span></a>
+    <a href="#/settings">Settings</a>
+  </nav>
+  <button id="scan" type="button">Scan tenant</button>
+</header>
+<p id="status" role="status" aria-live="polite"></p>
+<main id="view"></main>
+<footer>Documents are drafts for human review and are not legal advice.</footer>
+<script src="app.js"></script>
+</body>
+</html>

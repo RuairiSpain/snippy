@@ -1,0 +1,48 @@
+{
+  "agent_id": "agent-citizen-es",
+  "name": "Asistente Ciudadano",
+  "dataverse": {
+    "bot": {
+      "botid": "agent-citizen-es",
+      "name": "Asistente Ciudadano",
+      "schemaname": "cr_agent-citizen-es",
+      "authenticationmode": 1,
+      "language": 3082,
+      "createdon": "2026-09-01T09:00:00Z",
+      "modifiedon": "2026-10-20T15:30:00Z",
+      "statecode": 0
+    },
+    "components": [
+      {
+        "name": "Conversation Start",
+        "schemaname": "cr_agent.topic.ConversationStart",
+        "componenttype": 9,
+        "content": "kind: AdaptiveDialog\nbeginDialog:\n  kind: OnConversationStart\n  actions:\n    - kind: SendActivity\n      activity: \"Soy un asistente de IA del ayuntamiento. Puedo informarte de trámites.\"\n"
+      },
+      {
+        "name": "Instructions",
+        "schemaname": "cr_agent.gpt.default",
+        "componenttype": 15,
+        "content": "kind: GptComponentMetadata\ninstructions: \"Answer questions.\"\n"
+      },
+      {
+        "name": "Tramites",
+        "schemaname": "cr_agent.knowledge.Tramites",
+        "componenttype": 16,
+        "content": "kind: KnowledgeSourceConfiguration\nsource:\n  kind: SharePointSearchSource\n  site: https://ayto.sharepoint.com/sites/tramites\n"
+      }
+    ],
+    "channels": [
+      "DirectLine"
+    ]
+  },
+  "registry": {
+    "owner": {
+      "displayName": "Marta Gil"
+    },
+    "sponsor": {
+      "displayName": "Jorge Vidal"
+    },
+    "lastActivity": "2026-11-05T10:00:00Z"
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "version": "2.0",
+  "logging": {
+    "applicationInsights": { "samplingSettings": { "isEnabled": true, "excludedTypes": "Request" } }
+  },
+  "extensionBundle": {
+    "id": "Microsoft.Azure.Functions.ExtensionBundle.Preview",
+    "version": "[4.29.0, 5.0.0)"
+  },
+  "extensions": {
+    "mcp": {
+      "instructions": "EU-AI Action produces EU AI Act and GDPR compliance documents for Microsoft agents. Tools: list_agents, get_compliance_file, generate_document, approve_document. Documents are drafts for human review and are not legal advice.",
+      "serverName": "EU-AI Action",
+      "serverVersion": "0.1.0"
+    }
+  }
+}

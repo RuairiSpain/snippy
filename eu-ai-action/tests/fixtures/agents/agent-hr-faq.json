@@ -1,0 +1,56 @@
+{
+  "agent_id": "agent-hr-faq",
+  "name": "HR Policy Assistant",
+  "dataverse": {
+    "bot": {
+      "botid": "agent-hr-faq",
+      "name": "HR Policy Assistant",
+      "schemaname": "cr_agent-hr-faq",
+      "authenticationmode": 2,
+      "language": 1033,
+      "createdon": "2026-09-01T09:00:00Z",
+      "modifiedon": "2026-10-20T15:30:00Z",
+      "statecode": 0
+    },
+    "components": [
+      {
+        "name": "Conversation Start",
+        "schemaname": "cr_agent.topic.ConversationStart",
+        "componenttype": 9,
+        "content": "kind: AdaptiveDialog\nbeginDialog:\n  kind: OnConversationStart\n  actions:\n    - kind: SendActivity\n      activity: \"Hi, I am an AI assistant for HR policy questions.\"\n"
+      },
+      {
+        "name": "Instructions",
+        "schemaname": "cr_agent.gpt.default",
+        "componenttype": 15,
+        "content": "kind: GptComponentMetadata\ninstructions: \"Answer employee questions about HR policies using the HR policy library only.\"\n"
+      },
+      {
+        "name": "HR-Policies",
+        "schemaname": "cr_agent.knowledge.HR-Policies",
+        "componenttype": 16,
+        "content": "kind: KnowledgeSourceConfiguration\nsource:\n  kind: SharePointSearchSource\n  site: https://contoso.sharepoint.com/sites/hr\n"
+      }
+    ],
+    "channels": [
+      "MsTeams"
+    ]
+  },
+  "registry": {
+    "owner": {
+      "displayName": "Ana Ruiz"
+    },
+    "sponsor": {
+      "displayName": "Luis Mora"
+    },
+    "lastActivity": "2026-11-05T10:00:00Z"
+  },
+  "purview": {
+    "labels": [
+      {
+        "source": "HR-Policies",
+        "label": "Confidential"
+      }
+    ]
+  }
+}

@@ -1,0 +1,6 @@
+# Keyword -> personal data category. Matched case-insensitively against knowledge source names and sensitivity labels.
+# Heuristic only: shown to the DPO as "observed" and never as a conclusion.
+employment data: [hr, rrhh, payroll, nomina, nómina, recruit, empleado, employee]
+customer data: [customer, cliente, crm, client]
+financial data: [finance, finanzas, invoice, factura, payment, pago]
+health data: [health, salud, medical, clinical]
