@@ -54,7 +54,7 @@ The brief's MVP is: collector (Agent 365, Copilot Studio, Purview), per-agent fi
 
 ## 5. Reuse from the Snippy sample
 
-This repository is a placeholder. The Snippy code is independent of the new project, and the project will move to its own repository later. All new work lives in the `EU-AI Action/` folder, which has no imports from the rest of the repo, so it can be moved as a unit. Snippy is used here only as a source of patterns to copy. It is an Azure Functions (Python) app with Durable Functions, Cosmos DB, Azure OpenAI, MCP tool triggers and `azd` + Bicep infrastructure. That is close to the platform layer the brief describes.
+This repository is a placeholder. The Snippy code is independent of the new project, and the project will move to its own repository later. All new work lives in the `eu-ai-action/` folder, which has no imports from the rest of the repo, so it can be moved as a unit. Snippy is used here only as a source of patterns to copy. It is an Azure Functions (Python) app with Durable Functions, Cosmos DB, Azure OpenAI, MCP tool triggers and `azd` + Bicep infrastructure. That is close to the platform layer the brief describes.
 
 | Brief component | Snippy asset | Work needed |
 |---|---|---|
@@ -64,7 +64,7 @@ This repository is a placeholder. The Snippy code is independent of the new proj
 | API and MCP server | `@app.route` and `@app.mcp_tool_trigger` in `src/function_app.py` | New tools: `list_agents`, `get_compliance_file`, `generate_document`, `approve_document`. |
 | Infra and deployment | `infra/main.bicep`, `azure.yaml`, `infra/app/app-registration.bicep` | Add Key Vault, an Entra app registration with read-only Graph/Dataverse permissions, Static Web App for the portal. |
 
-Do not modify the Snippy code. Copy the patterns into the new folder. Layout inside `EU-AI Action/`: `src/collector/`, `src/rules/` (YAML), `src/engine/` (applicability, facts), `src/documents/` (Jinja2 templates in `es/` and `en/`, renderers), `src/api/`, `infra/`. The asset paths in the table above refer to the Snippy files to copy from.
+Do not modify the Snippy code. Copy the patterns into the new folder. Layout inside `eu-ai-action/`: `src/collector/`, `src/rules/` (YAML), `src/engine/` (applicability, facts), `src/documents/` (Jinja2 templates in `es/` and `en/`, renderers), `src/api/`, `infra/`. The asset paths in the table above refer to the Snippy files to copy from.
 
 ## 6. Design decisions for the MVP
 

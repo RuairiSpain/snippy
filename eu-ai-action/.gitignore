@@ -1,0 +1,5 @@
+.env
+.azure/
+__pycache__/
+*.pyc
+local.settings.json

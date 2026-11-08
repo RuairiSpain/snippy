@@ -1,4 +1,4 @@
-# EU-AI Action: MVP implementation plan
+# eu-ai-action: MVP implementation plan
 
 Companion to `MVP_PLAN.md` (scope, go/no-go criteria, commercial assessment). This file is the build plan.
 Status: draft, 8 November 2026. Microsoft API details are assumptions until milestone M1 confirms them; they are marked **[verify]**.
@@ -32,7 +32,7 @@ Done when:
 ## 3. Architecture
 
 ```
-Microsoft tenant                     EU-AI Action (Azure Functions)                 Output
+Microsoft tenant                     eu-ai-action (Azure Functions)                 Output
 -----------------                    -------------------------------                ------
 Dataverse (bots, botcomponents) --\
 Graph (agent registry, Entra) ----+-> collector -> evidence snapshot (raw JSON)
@@ -56,10 +56,10 @@ Principles (from `MVP_PLAN.md` section 6): rules not prompts decide applicabilit
 
 ## 4. Repository layout
 
-All paths below are inside `EU-AI Action/`. Nothing imports from the Snippy code.
+All paths below are inside `eu-ai-action/`. Nothing imports from the Snippy code.
 
 ```
-EU-AI Action/
+eu-ai-action/
   azure.yaml
   infra/                      main.bicep, cosmos, keyvault, function app, static web app, app registration
   src/
@@ -183,11 +183,11 @@ Timeline assumes one full-time developer. Each milestone ends with a demo and a 
 - [ ] Written conflict-of-interest clearance recorded in `docs/`.
 - [ ] Dev tenant with Copilot Studio; test environment in Dataverse.
 - [ ] Create 8 seeded agents: (1) public web chat with disclosure, (2) public web chat without, (3) Teams internal assistant, (4) HR FAQ agent with an HR knowledge source, (5) agent with sensitivity-labelled SharePoint source, (6) agent with an HTTP/connector tool, (7) agent with no owner set, (8) Spanish-language public agent with disclosure in Spanish.
-- [ ] Scaffold `EU-AI Action/` with `azd`, CI, lint, test runner, empty function app deployed to a dev subscription.
+- [ ] Scaffold `eu-ai-action/` with `azd`, CI, lint, test runner, empty function app deployed to a dev subscription.
 - Exit: CI green; empty deploy works; agents listed in the Copilot Studio UI.
 
 ### M1: Feasibility spikes (week 1 to 2)
-Scripts in `EU-AI Action/spikes/`, one per question, each producing a written result in `docs/spike-results.md`.
+Scripts in `eu-ai-action/spikes/`, one per question, each producing a written result in `docs/spike-results.md`.
 - [ ] Dataverse: read `bots` and `botcomponents` app-only; locate the Conversation Start topic and its message text; list channels and authentication mode **[verify]**.
 - [ ] Graph: agent registry / Entra agent identity endpoints, fields returned, permission names, v1.0 or beta **[verify]**.
 - [ ] Purview: audit query for agent activity with app-only identity; sensitivity label lookup for a SharePoint source **[verify]**.
@@ -260,10 +260,28 @@ Multi-tenant self-service onboarding, billing, Marketplace packaging, SSO beyond
 | Test tenant is not representative | Run the pilots in real tenants before judging data quality |
 | Scope creep into later stages | Anything outside section 1 goes to a backlog file; no new document types before M6 |
 
-## 14. Decisions needed from you before M0
+## 14. Decisions
 
-1. Folder name: confirm `EU-AI Action` with a space, or switch to `eu-ai-action`. A space makes shell and CI paths harder.
-2. Dev tenant: do you already have a Microsoft 365 / Copilot Studio tenant you are allowed to use, given the clearance?
-3. Azure subscription and region for hosting (the plan assumes an EU region).
-4. Counsel contact for rule and template review, since M3 and M4 depend on it.
-5. Portal: build the minimal static site in M5, or demo with MCP tools and the API only and skip it.
+| # | Decision | Status |
+|---|---|---|
+| 1 | Folder name | `eu-ai-action` (no spaces). Done. |
+| 2 | Dev tenant | Available. |
+| 3 | Subscription, region and other deployment inputs | All parameterised in `.env.example` (section 15); no values are hard-coded in Bicep, code or CI. |
+| 4 | Counsel for rule and template review | Open. Options are in section 16. |
+| 5 | Portal | Build the minimal static portal in M5. |
+
+## 15. Configuration
+
+Every environment-dependent value is read from environment variables. `.env.example` lists them; `.env` is git-ignored. `azd` reads the same names through `azd env set`, Bicep takes them as parameters, and CI takes them from GitHub environment variables and secrets. Code reads settings only through `src/settings.py` (pydantic-settings), which fails fast on a missing required value. Secrets are never in the file; the file holds Key Vault secret names instead.
+
+## 16. Counsel options for rule and template review
+
+| Option | Fit | Trade-off |
+|---|---|---|
+| Spanish law firm with a technology and data protection practice (for example the large national firms) | Credible with banks and public bodies; can review ES templates and AESIA points | Highest cost; slower; check that the team has AI Act experience |
+| Boutique AI or data protection firm | Specialist depth; flexible fixed-scope work | Less brand weight with large customers |
+| Independent privacy lawyer or DPO consultant with AI Act experience | Practical for Art. 30 and Art. 50; cheapest and fastest | Single person; may not cover labour law for worker notices |
+| Fractional or retained counsel | Review of every rule change over time, which the content-maintenance cost needs | Ongoing cost from the start |
+| Design-partner customer's legal team | Free; tests against a real buyer | Not independent and not an endorsement; do not treat as sign-off |
+
+I have not checked any named firm's AI Act experience. Recommended approach: start with a fixed-fee review by an independent privacy lawyer or boutique for the three MVP rules and templates in ES and EN, with written sign-off recorded in each rule's `reviewed_by` field and each template header. Move to a retained arrangement if the MVP passes go/no-go. Ask each candidate for: AI Act and GDPR experience, Spanish-language review, turnaround time, fixed fee, and whether their insurance covers advice used in a product. The product terms of service should state that documents are drafts for human review and not legal advice.
