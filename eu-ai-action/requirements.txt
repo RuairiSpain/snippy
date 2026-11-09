@@ -12,3 +12,4 @@ PyYAML
 Jinja2
 python-docx
 reportlab
+openpyxl
