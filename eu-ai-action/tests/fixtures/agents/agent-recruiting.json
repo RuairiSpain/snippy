@@ -1,0 +1,103 @@
+{
+  "agent_id": "agent-recruiting",
+  "name": "Recruiting Screener",
+  "dataverse": {
+    "bot": {
+      "botid": "agent-recruiting",
+      "name": "Recruiting Screener",
+      "schemaname": "cr_agent-recruiting",
+      "authenticationmode": 2,
+      "language": 1033,
+      "createdon": "2026-09-01T09:00:00Z",
+      "modifiedon": "2026-10-20T15:30:00Z",
+      "statecode": 0
+    },
+    "components": [
+      {
+        "name": "Conversation Start",
+        "schemaname": "cr_agent.topic.ConversationStart",
+        "componenttype": 9,
+        "content": "kind: AdaptiveDialog\nbeginDialog:\n  kind: OnConversationStart\n  actions:\n    - kind: SendActivity\n      activity: \"Hi, I am an AI assistant that helps the recruiting team.\"\n"
+      },
+      {
+        "name": "Instructions",
+        "schemaname": "cr_agent.gpt.default",
+        "componenttype": 15,
+        "content": "kind: GptComponentMetadata\ninstructions: \"Screen candidate CVs and rank candidates for open roles.\"\n"
+      },
+      {
+        "name": "Open-Roles",
+        "schemaname": "cr_agent.knowledge.Open-Roles",
+        "componenttype": 16,
+        "content": "kind: KnowledgeSourceConfiguration\nsource:\n  kind: SharePointSearchSource\n  site: https://contoso.sharepoint.com/sites/recruiting\n"
+      }
+    ],
+    "channels": [
+      "MsTeams"
+    ]
+  },
+  "registry": {
+    "owner": {
+      "displayName": "Ana Ruiz"
+    },
+    "sponsor": {
+      "displayName": "Luis Mora"
+    },
+    "lastActivity": "2026-11-05T10:00:00Z"
+  },
+  "entra": {
+    "users": [
+      {
+        "displayName": "Ana Ruiz",
+        "role": "owner"
+      },
+      {
+        "displayName": "Marta Gil",
+        "role": "overseer"
+      }
+    ],
+    "accessGroups": [
+      {
+        "name": "Agent users",
+        "memberCount": 2
+      }
+    ]
+  },
+  "learning": {
+    "completions": [
+      {
+        "user": "Ana Ruiz",
+        "course": "AI literacy",
+        "date": "2026-05-01"
+      },
+      {
+        "user": "Marta Gil",
+        "course": "AI literacy",
+        "date": "2026-05-01"
+      }
+    ]
+  },
+  "retention": {
+    "purviewAuditDays": 365,
+    "logAnalyticsDays": 365
+  },
+  "foundry": {
+    "deployments": [
+      {
+        "name": "gpt-4o",
+        "provider": "Azure OpenAI",
+        "region": "swedencentral",
+        "fineTuned": true
+      }
+    ],
+    "evaluations": [
+      {
+        "name": "groundedness",
+        "date": "2026-10-01",
+        "score": 0.91
+      }
+    ],
+    "generatesContent": [],
+    "contentCredentials": false
+  }
+}

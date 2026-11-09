@@ -1,0 +1,63 @@
+{
+  "agent_id": "agent-finance-labels",
+  "name": "Finance Reports Agent",
+  "dataverse": {
+    "bot": {
+      "botid": "agent-finance-labels",
+      "name": "Finance Reports Agent",
+      "schemaname": "cr_agent-finance-labels",
+      "authenticationmode": 2,
+      "language": 1033,
+      "createdon": "2026-09-01T09:00:00Z",
+      "modifiedon": "2026-10-20T15:30:00Z",
+      "statecode": 0
+    },
+    "components": [
+      {
+        "name": "Conversation Start",
+        "schemaname": "cr_agent.topic.ConversationStart",
+        "componenttype": 9,
+        "content": "kind: AdaptiveDialog\nbeginDialog:\n  kind: OnConversationStart\n  actions:\n    - kind: SendActivity\n      activity: \"Welcome to the finance reports agent.\"\n"
+      },
+      {
+        "name": "Instructions",
+        "schemaname": "cr_agent.gpt.default",
+        "componenttype": 15,
+        "content": "kind: GptComponentMetadata\ninstructions: \"Answer questions.\"\n"
+      },
+      {
+        "name": "Finance-Invoices",
+        "schemaname": "cr_agent.knowledge.Finance-Invoices",
+        "componenttype": 16,
+        "content": "kind: KnowledgeSourceConfiguration\nsource:\n  kind: SharePointSearchSource\n  site: https://contoso.sharepoint.com/sites/finance\n"
+      },
+      {
+        "name": "ERP Reports",
+        "schemaname": "cr_agent.action.ERP Reports",
+        "componenttype": 9,
+        "content": "kind: ConnectorAction\nconnector: ERP Reports\n"
+      }
+    ],
+    "channels": [
+      "MsTeams",
+      "SharePoint"
+    ]
+  },
+  "registry": {
+    "owner": {
+      "displayName": "Ana Ruiz"
+    },
+    "sponsor": {
+      "displayName": "Luis Mora"
+    },
+    "lastActivity": "2026-11-05T10:00:00Z"
+  },
+  "purview": {
+    "labels": [
+      {
+        "source": "Finance-Invoices",
+        "label": "Highly Confidential"
+      }
+    ]
+  }
+}

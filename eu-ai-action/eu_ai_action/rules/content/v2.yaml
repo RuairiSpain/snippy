@@ -1,0 +1,290 @@
+# v2 rules. Counsel review required before release (reviewed_by empty).
+- id: AIA-79-RISK-NOTICE
+  regulation: EU AI Act
+  article: "Art. 26(5), Art. 79"
+  applies_from: 2027-12-02
+  role: deployer
+  version: 1
+  per: incident
+  applies_when:
+    all:
+      - {fact: incident.severity, op: in, value: [high, critical]}
+  check: null
+  evidence: [incidents]
+  document: risk-notice-suspension
+  source_citation: "Regulation (EU) 2024/1689, Arts. 26(5) and 79"
+  reviewed_by: ""
+
+- id: AIA-86-EXPLANATION
+  regulation: EU AI Act
+  article: "Art. 86"
+  applies_from: 2027-12-02
+  role: deployer
+  version: 1
+  per: request
+  applies_when:
+    all: []
+  check: null
+  evidence: []
+  document: decision-explanation
+  source_citation: "Regulation (EU) 2024/1689, Art. 86"
+  reviewed_by: ""
+
+- id: AIA-27-FRIA
+  regulation: EU AI Act
+  article: "Art. 27"
+  applies_from: 2027-12-02
+  role: deployer
+  version: 1
+  applies_when:
+    all:
+      - any:
+          - {fact: input.risk_tier, op: eq, value: high}
+          - all:
+              - {fact: input.risk_tier, op: missing}
+              - {fact: suggestedAnnexIII, op: exists}
+      - any:
+          - {fact: org.is_public_body, op: eq, value: "yes"}
+          - {fact: org.provides_public_services, op: eq, value: "yes"}
+          - {fact: org.credit_or_insurance_pricing, op: eq, value: "yes"}
+  check: null
+  evidence: [affectedGroups, overseers, evaluations]
+  document: fria
+  source_citation: "Regulation (EU) 2024/1689, Art. 27"
+  reviewed_by: ""
+
+- id: AIA-49-DB-REGISTRATION
+  regulation: EU AI Act
+  article: "Art. 26(8), Art. 49(3)"
+  applies_from: 2027-12-02
+  role: deployer
+  version: 1
+  applies_when:
+    all:
+      - any:
+          - {fact: input.risk_tier, op: eq, value: high}
+          - all:
+              - {fact: input.risk_tier, op: missing}
+              - {fact: suggestedAnnexIII, op: exists}
+      - {fact: org.is_public_body, op: eq, value: "yes"}
+  check: null
+  evidence: []
+  document: eu-database-registration
+  source_citation: "Regulation (EU) 2024/1689, Arts. 26(8) and 49(3)"
+  reviewed_by: ""
+
+- id: AIA-50-2-MARKING
+  regulation: EU AI Act
+  article: "Art. 50(2)"
+  applies_from: 2026-12-02
+  role: provider
+  version: 1
+  # No model evidence means the question is open, not answered "no": the duty applies with an unknown result.
+  applies_when:
+    any:
+      - {fact: generatesSyntheticContent, op: eq, value: true}
+      - {fact: generatesSyntheticContent, op: missing}
+  check:
+    unknown_when:
+      - {fact: contentMarking, op: missing}
+    pass_when:
+      - {fact: contentMarking, op: eq, value: true}
+  evidence: [syntheticContentTypes, modelDeployments, contentMarking]
+  document: synthetic-content-marking-check
+  source_citation: "Regulation (EU) 2024/1689, Art. 50(2)"
+  reviewed_by: ""
+
+- id: AIA-50-4-PUBLIC-TEXT
+  regulation: EU AI Act
+  article: "Art. 50(4)"
+  applies_from: 2026-08-02
+  role: deployer
+  version: 1
+  applies_when:
+    all:
+      - {fact: input.publishes_public_interest_content, op: eq, value: "yes"}
+  check: null
+  evidence: []
+  document: public-text-disclosure
+  source_citation: "Regulation (EU) 2024/1689, Art. 50(4)"
+  reviewed_by: ""
+
+- id: AIA-26-4-INPUT-DATA
+  regulation: EU AI Act
+  article: "Art. 26(4)"
+  applies_from: 2027-12-02
+  role: deployer
+  version: 1
+  applies_when:
+    any:
+      - {fact: input.risk_tier, op: eq, value: high}
+      - all:
+          - {fact: input.risk_tier, op: missing}
+          - {fact: suggestedAnnexIII, op: exists}
+  check: null
+  evidence: [knowledgeSources, sensitivityLabels]
+  document: input-data-relevance
+  source_citation: "Regulation (EU) 2024/1689, Art. 26(4)"
+  reviewed_by: ""
+
+- id: AIA-26-1-INSTRUCTIONS
+  regulation: EU AI Act
+  article: "Art. 26(1)"
+  applies_from: 2027-12-02
+  role: deployer
+  version: 1
+  applies_when:
+    any:
+      - {fact: input.risk_tier, op: eq, value: high}
+      - all:
+          - {fact: input.risk_tier, op: missing}
+          - {fact: suggestedAnnexIII, op: exists}
+  check: null
+  evidence: [modelDeployments, modifiedAt]
+  document: instructions-for-use-check
+  source_citation: "Regulation (EU) 2024/1689, Art. 26(1)"
+  reviewed_by: ""
+
+- id: GDPR-22-AUTOMATED-DECISIONS
+  regulation: GDPR
+  article: "Art. 22"
+  applies_from: 2018-05-25
+  role: controller
+  version: 1
+  applies_when:
+    all:
+      - {fact: input.decisions_about_persons, op: eq, value: "yes"}
+  check: null
+  evidence: [overseers]
+  document: automated-decision-safeguards
+  source_citation: "Regulation (EU) 2016/679, Art. 22"
+  reviewed_by: ""
+
+- id: DORA-19-INCIDENT
+  regulation: DORA
+  article: "Art. 19"
+  applies_from: 2025-01-17
+  role: financial entity
+  version: 1
+  per: incident
+  applies_when:
+    all:
+      - {fact: org.is_financial_entity, op: eq, value: "yes"}
+      - {fact: incident.severity, op: in, value: [high, critical]}
+  check: null
+  evidence: [incidents, modelDeployments, connectors]
+  document: dora-incident-report
+  source_citation: "Regulation (EU) 2022/2554, Art. 19"
+  reviewed_by: ""
+
+- id: DORA-28-REGISTER
+  regulation: DORA
+  article: "Art. 28(3)"
+  applies_from: 2025-01-17
+  role: financial entity
+  version: 1
+  applies_when:
+    all:
+      - {fact: org.is_financial_entity, op: eq, value: "yes"}
+  check: null
+  evidence: [modelProviders, modelDeployments, connectors]
+  document: dora-register-rows
+  source_citation: "Regulation (EU) 2022/2554, Art. 28(3)"
+  reviewed_by: ""
+
+- id: NIS2-21-ASSET
+  regulation: NIS2
+  article: "Art. 21(2)(i)"
+  applies_from: 2024-10-17
+  role: essential or important entity
+  version: 1
+  applies_when:
+    all:
+      - {fact: org.is_nis2_entity, op: eq, value: "yes"}
+  check: null
+  evidence: [owner, channels, connectors]
+  document: nis2-asset-entry
+  source_citation: "Directive (EU) 2022/2555, Art. 21(2)"
+  reviewed_by: ""
+
+- id: NIS2-23-INCIDENT
+  regulation: NIS2
+  article: "Art. 23"
+  applies_from: 2024-10-17
+  role: essential or important entity
+  version: 1
+  per: incident
+  applies_when:
+    all:
+      - {fact: org.is_nis2_entity, op: eq, value: "yes"}
+      - {fact: incident.severity, op: in, value: [high, critical]}
+  check: null
+  evidence: [incidents]
+  document: nis2-incident-report
+  source_citation: "Directive (EU) 2022/2555, Art. 23"
+  reviewed_by: ""
+
+- id: ISO42001-IMPACT
+  regulation: ISO/IEC 42001
+  article: "AI system impact assessment"
+  applies_from: 2023-12-18
+  role: organisation seeking certification
+  version: 1
+  applies_when:
+    any:
+      - {fact: org.iso42001_in_scope, op: eq, value: "yes"}
+      - {fact: input.iso42001, op: eq, value: "yes"}
+  check: null
+  evidence: [evaluations, overseers]
+  document: iso42001-impact-assessment
+  source_citation: "ISO/IEC 42001:2023"
+  reviewed_by: ""
+
+- id: ISO42001-SOA
+  regulation: ISO/IEC 42001
+  article: "Annex A, Statement of Applicability"
+  applies_from: 2023-12-18
+  role: organisation seeking certification
+  version: 1
+  applies_when:
+    any:
+      - {fact: org.iso42001_in_scope, op: eq, value: "yes"}
+      - {fact: input.iso42001, op: eq, value: "yes"}
+  check: null
+  evidence: [overseers, literacyGaps, retentionDays, evaluations]
+  document: iso42001-soa-evidence
+  source_citation: "ISO/IEC 42001:2023, Annex A"
+  reviewed_by: ""
+
+- id: ES-AESIA-INCIDENT
+  regulation: EU AI Act (Spain)
+  article: "Art. 73, AESIA notice"
+  applies_from: 2027-12-02
+  role: deployer
+  version: 1
+  per: incident
+  applies_when:
+    all:
+      - {fact: org.country, op: eq, value: "ES"}
+      - {fact: incident.seriousIncidentCandidate, op: eq, value: true}
+  check: null
+  evidence: [incidents]
+  document: aesia-incident-notice
+  source_citation: "Regulation (EU) 2024/1689, Art. 73"
+  reviewed_by: ""
+
+- id: ES-ENS-EVIDENCE
+  regulation: ENS (Spain)
+  article: "Real Decreto 311/2022"
+  applies_from: 2022-05-05
+  role: public sector body or supplier
+  version: 1
+  applies_when:
+    all:
+      - {fact: org.country, op: eq, value: "ES"}
+      - {fact: org.is_public_body, op: eq, value: "yes"}
+  check: null
+  evidence: [owner, channels, authMode, sensitivityLabels, retentionDays, overseers]
+  document: ens-evidence-pack
+  source_citation: "Real Decreto 311/2022"
+  reviewed_by: ""

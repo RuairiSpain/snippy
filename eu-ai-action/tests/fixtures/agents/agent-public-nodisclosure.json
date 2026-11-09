@@ -1,0 +1,48 @@
+{
+  "agent_id": "agent-public-nodisclosure",
+  "name": "Public Help Bot",
+  "dataverse": {
+    "bot": {
+      "botid": "agent-public-nodisclosure",
+      "name": "Public Help Bot",
+      "schemaname": "cr_agent-public-nodisclosure",
+      "authenticationmode": 1,
+      "language": 1033,
+      "createdon": "2026-09-01T09:00:00Z",
+      "modifiedon": "2026-10-20T15:30:00Z",
+      "statecode": 0
+    },
+    "components": [
+      {
+        "name": "Conversation Start",
+        "schemaname": "cr_agent.topic.ConversationStart",
+        "componenttype": 9,
+        "content": "kind: AdaptiveDialog\nbeginDialog:\n  kind: OnConversationStart\n  actions:\n    - kind: SendActivity\n      activity: \"Hello! How can I help you today?\"\n"
+      },
+      {
+        "name": "Instructions",
+        "schemaname": "cr_agent.gpt.default",
+        "componenttype": 15,
+        "content": "kind: GptComponentMetadata\ninstructions: \"Answer questions.\"\n"
+      },
+      {
+        "name": "Product docs",
+        "schemaname": "cr_agent.knowledge.Product docs",
+        "componenttype": 16,
+        "content": "kind: KnowledgeSourceConfiguration\nsource:\n  kind: SharePointSearchSource\n  site: https://contoso.sharepoint.com/sites/docs\n"
+      }
+    ],
+    "channels": [
+      "DirectLine"
+    ]
+  },
+  "registry": {
+    "owner": {
+      "displayName": "Ana Ruiz"
+    },
+    "sponsor": {
+      "displayName": "Luis Mora"
+    },
+    "lastActivity": "2026-11-05T10:00:00Z"
+  }
+}

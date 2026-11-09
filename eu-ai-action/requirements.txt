@@ -1,0 +1,15 @@
+azure-functions>=1.24.0
+azure-functions-durable
+azure-identity
+azure-keyvault-secrets
+azure-cosmos
+azure-storage-blob
+openai
+httpx
+pydantic>=2.6
+pydantic-settings>=2.2
+PyYAML
+Jinja2
+python-docx
+reportlab
+openpyxl

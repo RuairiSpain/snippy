@@ -1,0 +1,37 @@
+# Counsel must review every rule before release. reviewed_by stays empty until written sign-off exists:
+# format "Name, Firm, YYYY-MM-DD".
+- id: AIA-50-1-disclosure
+  regulation: EU AI Act
+  article: "Art. 50(1)"
+  applies_from: 2026-08-02
+  role: provider
+  version: 1
+  # A public-facing status that cannot be determined counts as "applies": the duty is not silently skipped.
+  applies_when:
+    any:
+      - {fact: isPublicFacing, op: eq, value: true}
+      - {fact: isPublicFacing, op: missing}
+  check:
+    unknown_when:
+      - {fact: greetingText, op: missing}
+      - {fact: aiDisclosureStrength, op: eq, value: weak}
+    pass_when:
+      - {fact: aiDisclosureStrength, op: eq, value: strong}
+  evidence: [greetingText, channels, authMode]
+  document: ai-interaction-disclosure
+  source_citation: "Regulation (EU) 2024/1689, Art. 50(1)"
+  reviewed_by: ""
+
+- id: AIA-REGISTER-ENTRY
+  regulation: EU AI Act
+  article: "Art. 26 (prerequisite), Art. 4"
+  applies_from: 2025-02-02
+  role: deployer
+  version: 1
+  applies_when:
+    all: []
+  check: null
+  evidence: [name, owner, sponsor, channels, knowledgeSources, connectors, lastActivity]
+  document: register-entry
+  source_citation: "Regulation (EU) 2024/1689, Arts. 4 and 26"
+  reviewed_by: ""

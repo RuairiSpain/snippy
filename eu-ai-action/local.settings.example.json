@@ -1,0 +1,9 @@
+{
+  "IsEncrypted": false,
+  "Values": {
+    "FUNCTIONS_WORKER_RUNTIME": "python",
+    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+    "USE_FIXTURES": "true",
+    "REQUIRE_COUNSEL_REVIEW_FOR_RELEASE": "false"
+  }
+}

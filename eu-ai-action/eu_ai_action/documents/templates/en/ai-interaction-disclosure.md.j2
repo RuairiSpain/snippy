@@ -1,0 +1,39 @@
+# {{ title }}
+
+{{ banner }}
+
+## Agent
+
+| Agent | {{ f.agent_name }} |
+| Owner | {{ f.owner }} |
+| Channels | {{ f.channels }} |
+| Authentication | {{ f.auth_mode }} |
+| Business purpose | {{ f.business_purpose }} |
+
+## What the agent does
+
+{{ f.agent_description }}
+
+## Check result
+
+{% if raw.check_result == "pass" -%}
+**Result: disclosure present.** The opening message of the agent tells the user that they are interacting with an AI system.
+{%- elif raw.check_result == "fail" -%}
+**Result: disclosure missing.** No wording telling the user that they are interacting with an AI system was found in the opening message of the agent.
+{%- else -%}
+**Result: inconclusive.** The opening message is missing or its wording may not clearly say that the user is interacting with an AI system. A person must review it.
+{%- endif %}
+
+| Opening message found | {{ f.greeting_text }} |
+| Matched wording | {{ f.disclosure_match }} |
+
+## Suggested wording
+
+If the result is not "disclosure present", the following wording is proposed for approval by the agent owner and legal:
+
+- "You are chatting with an AI assistant, not a person."
+- "Estás hablando con un asistente de inteligencia artificial, no con una persona."
+
+## Basis
+
+Regulation (EU) 2024/1689, Article 50(1): providers must ensure that AI systems intended to interact directly with natural persons inform them that they are interacting with an AI system, unless this is obvious. This record is a technical check of the agent configuration and does not state that the organisation complies with the Regulation.

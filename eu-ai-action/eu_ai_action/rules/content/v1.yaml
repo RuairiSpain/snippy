@@ -1,0 +1,167 @@
+# v1 rules. Counsel review required before release (reviewed_by empty).
+# "High-risk candidate" = the confirmed risk tier is high, or no tier is confirmed yet and keyword matching suggests an Annex III area.
+- id: AIA-RISK-CLASSIFICATION
+  regulation: EU AI Act
+  article: "Art. 6, Annex III"
+  applies_from: 2027-12-02
+  role: deployer
+  version: 1
+  applies_when: {all: []}
+  check: null
+  evidence: [suggestedAnnexIII, dataCategories, knowledgeSources]
+  document: risk-classification
+  source_citation: "Regulation (EU) 2024/1689, Art. 6 and Annex III"
+  reviewed_by: ""
+
+- id: AIA-25-PROVIDER-STATUS
+  regulation: EU AI Act
+  article: "Art. 25"
+  applies_from: 2027-12-02
+  role: deployer
+  version: 1
+  applies_when:
+    any:
+      - {fact: fineTunedModel, op: eq, value: true}
+      - {fact: input.substantial_modification, op: eq, value: "yes"}
+  check: null
+  evidence: [modelDeployments, fineTunedModel, modifiedAt]
+  document: provider-status
+  source_citation: "Regulation (EU) 2024/1689, Art. 25"
+  reviewed_by: ""
+
+- id: AIA-4-LITERACY
+  regulation: EU AI Act
+  article: "Art. 4"
+  applies_from: 2025-02-02
+  role: deployer
+  version: 1
+  applies_when: {all: []}
+  check:
+    unknown_when:
+      - {fact: literacyComplete, op: missing}
+    pass_when:
+      - {fact: literacyComplete, op: eq, value: true}
+  evidence: [accessUsers, literacyGaps]
+  document: literacy-record
+  source_citation: "Regulation (EU) 2024/1689, Art. 4, as amended by Regulation (EU) 2026/1744"
+  reviewed_by: ""
+
+- id: AIA-26-2-OVERSIGHT
+  regulation: EU AI Act
+  article: "Art. 14, Art. 26(2)"
+  applies_from: 2027-12-02
+  role: deployer
+  version: 1
+  applies_when: &high_risk
+    any:
+      - {fact: input.risk_tier, op: eq, value: high}
+      - all:
+          - {fact: input.risk_tier, op: missing}
+          - {fact: suggestedAnnexIII, op: exists}
+  check:
+    unknown_when:
+      - {fact: overseers, op: missing}
+    pass_when:
+      - {fact: overseers, op: exists}
+  evidence: [overseers, owner, sponsor]
+  document: oversight-record
+  source_citation: "Regulation (EU) 2024/1689, Arts. 14 and 26(2)"
+  reviewed_by: ""
+
+- id: AIA-26-6-LOG-RETENTION
+  regulation: EU AI Act
+  article: "Art. 26(6)"
+  applies_from: 2027-12-02
+  role: deployer
+  version: 1
+  applies_when: *high_risk
+  check:
+    unknown_when:
+      - {fact: minRetentionDays, op: missing}
+    pass_when:
+      - {fact: retentionOk, op: eq, value: true}
+  evidence: [retentionDays, minRetentionDays]
+  document: log-retention-attestation
+  source_citation: "Regulation (EU) 2024/1689, Art. 26(6)"
+  reviewed_by: ""
+
+- id: AIA-26-7-WORKER-NOTICE
+  regulation: EU AI Act
+  article: "Art. 26(7)"
+  applies_from: 2027-12-02
+  role: deployer
+  version: 1
+  applies_when:
+    all:
+      - *high_risk
+      - {fact: org.is_employer, op: eq, value: "yes"}
+      - {fact: input.used_in_workplace, op: eq, value: "yes"}
+  check: null
+  evidence: [affectedGroups]
+  document: worker-notice
+  source_citation: "Regulation (EU) 2024/1689, Art. 26(7)"
+  reviewed_by: ""
+
+- id: AIA-26-11-AFFECTED-PERSON
+  regulation: EU AI Act
+  article: "Art. 26(11)"
+  applies_from: 2027-12-02
+  role: deployer
+  version: 1
+  applies_when:
+    all:
+      - *high_risk
+      - {fact: input.decisions_about_persons, op: eq, value: "yes"}
+  check: null
+  evidence: [suggestedAnnexIII]
+  document: affected-person-notice
+  source_citation: "Regulation (EU) 2024/1689, Art. 26(11)"
+  reviewed_by: ""
+
+- id: GDPR-35-DPIA
+  regulation: GDPR
+  article: "Art. 35"
+  applies_from: 2018-05-25
+  role: controller
+  version: 1
+  applies_when:
+    any:
+      - *high_risk
+      - {fact: input.dpia_required, op: eq, value: "yes"}
+  check: null
+  evidence: [dataCategories, sensitivityLabels, knowledgeSources, connectors]
+  document: dpia-input-pack
+  source_citation: "Regulation (EU) 2016/679, Art. 35; Regulation (EU) 2024/1689, Art. 26(9)"
+  reviewed_by: ""
+
+- id: GDPR-33-BREACH
+  regulation: GDPR
+  article: "Art. 33"
+  applies_from: 2018-05-25
+  role: controller
+  version: 1
+  per: incident
+  applies_when:
+    all:
+      - {fact: incident.personalDataAffected, op: eq, value: true}
+  check: null
+  evidence: [incidents]
+  document: breach-notification-draft
+  source_citation: "Regulation (EU) 2016/679, Art. 33"
+  reviewed_by: ""
+
+- id: AIA-73-INCIDENT
+  regulation: EU AI Act
+  article: "Art. 73, Art. 26(5)"
+  applies_from: 2027-12-02
+  role: deployer
+  version: 1
+  per: incident
+  applies_when:
+    all:
+      - {fact: incident.seriousIncidentCandidate, op: eq, value: true}
+  check: null
+  evidence: [incidents, modelDeployments]
+  document: serious-incident-report
+  source_citation: "Regulation (EU) 2024/1689, Arts. 73 and 26(5)"
+  reviewed_by: ""

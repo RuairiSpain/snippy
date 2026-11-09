@@ -1,0 +1,17 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2018-05-01/subscriptionDeploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "environmentName": { "value": "${AZURE_ENV_NAME}" },
+    "location": { "value": "${AZURE_LOCATION}" },
+    "openAiLocation": { "value": "${AZURE_OPENAI_LOCATION}" },
+    "targetTenantId": { "value": "${TARGET_TENANT_ID}" },
+    "collectorClientId": { "value": "${COLLECTOR_CLIENT_ID}" },
+    "dataverseEnvironmentUrl": { "value": "${DATAVERSE_ENVIRONMENT_URL}" },
+    "portalEntraClientId": { "value": "${PORTAL_ENTRA_CLIENT_ID}" },
+    "portalAllowedTenantIds": { "value": "${PORTAL_ALLOWED_TENANT_IDS}" },
+    "openAiModelName": { "value": "${AZURE_OPENAI_MODEL_NAME=gpt-4o}" },
+    "openAiModelVersion": { "value": "${AZURE_OPENAI_MODEL_VERSION=2024-11-20}" },
+    "keyVaultSecretsUserRoleId": { "value": "${KEY_VAULT_SECRETS_USER_ROLE_ID}" }
+  }
+}

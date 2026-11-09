@@ -1,0 +1,35 @@
+name: eu-ai-action
+on:
+  push:
+    paths: ["eu-ai-action/**", ".github/workflows/eu-ai-action.yml"]
+  pull_request:
+    paths: ["eu-ai-action/**", ".github/workflows/eu-ai-action.yml"]
+defaults:
+  run:
+    working-directory: eu-ai-action
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11", cache: pip, cache-dependency-path: eu-ai-action/requirements-dev.txt }
+      - run: pip install -r requirements-dev.txt
+      - run: ruff check .
+      - run: pytest -q
+      - name: Fixtures are up to date
+        run: python scripts/make_fixtures.py /tmp/fx && diff -r /tmp/fx tests/fixtures/agents
+  portal-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - uses: actions/setup-node@v4
+        with: { node-version: "20" }
+      - run: pip install -r requirements-dev.txt
+      - run: npm install --no-save playwright@1.49.1 && npx playwright install --with-deps chromium
+      - run: |
+          python scripts/dev_server.py 8099 &
+          sleep 3
+          NODE_PATH=$PWD/node_modules node tests/e2e/portal_smoke.js http://127.0.0.1:8099 /tmp

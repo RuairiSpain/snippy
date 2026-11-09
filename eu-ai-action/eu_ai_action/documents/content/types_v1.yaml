@@ -1,0 +1,298 @@
+# v1 documents. Same rules as types.yaml: nothing here is reviewed by counsel until template_reviewed_by is filled.
+# Human field labels (en) appear in the portal. Layout rows are bilingual.
+
+- id: risk-classification
+  rule: AIA-RISK-CLASSIFICATION
+  template_reviewed_by: ""
+  titles: {en: "Risk classification record (Art. 6, Annex III)", es: "Registro de clasificación de riesgo (art. 6, anexo III)"}
+  fields:
+    - {name: agent_name, source: fact, key: name}
+    - {name: suggested_areas, source: fact, key: suggestedAnnexIII}
+    - {name: data_categories, source: fact, key: dataCategories}
+    - {name: knowledge_sources, source: fact, key: knowledgeSources}
+    - {name: business_purpose, source: human, label: {en: "Business purpose"}}
+    - {name: risk_tier, source: human, label: {en: "Confirmed risk tier (minimal, limited, high or prohibited-concern)"}}
+    - {name: annex_iii_area, source: human, label: {en: "Annex III area, if high-risk"}}
+    - {name: risk_rationale, source: human, label: {en: "Rationale for the classification"}}
+  layout:
+    - title: {en: "Agent", es: "Agente"}
+      rows:
+        - {label: {en: "Agent", es: "Agente"}, field: agent_name}
+        - {label: {en: "Business purpose", es: "Finalidad de negocio"}, field: business_purpose}
+        - {label: {en: "Data categories observed", es: "Categorías de datos observadas"}, field: data_categories}
+        - {label: {en: "Knowledge sources", es: "Fuentes de conocimiento"}, field: knowledge_sources}
+    - title: {en: "Suggested by keyword matching (not a conclusion)", es: "Sugerencia por coincidencia de palabras clave (no es una conclusión)"}
+      rows:
+        - {label: {en: "Possible Annex III areas", es: "Posibles ámbitos del anexo III"}, field: suggested_areas}
+    - title: {en: "Confirmed classification", es: "Clasificación confirmada"}
+      rows:
+        - {label: {en: "Risk tier", es: "Nivel de riesgo"}, field: risk_tier}
+        - {label: {en: "Annex III area", es: "Ámbito del anexo III"}, field: annex_iii_area}
+        - {label: {en: "Rationale", es: "Justificación"}, field: risk_rationale}
+  basis:
+    en: "Regulation (EU) 2024/1689, Article 6 and Annex III. The classification is a human and legal decision. This record documents it and does not state that the organisation complies with the Regulation."
+    es: "Reglamento (UE) 2024/1689, artículo 6 y anexo III. La clasificación es una decisión humana y jurídica. Este registro la documenta y no afirma que la organización cumpla el Reglamento."
+
+- id: provider-status
+  rule: AIA-25-PROVIDER-STATUS
+  template_reviewed_by: ""
+  titles: {en: "Provider-status assessment (Art. 25)", es: "Evaluación del estatus de proveedor (art. 25)"}
+  fields:
+    - {name: agent_name, source: fact, key: name}
+    - {name: model_deployments, source: fact, key: modelDeployments}
+    - {name: fine_tuned, source: fact, key: fineTunedModel}
+    - {name: modified_at, source: fact, key: modifiedAt}
+    - {name: substantial_modification, source: human, label: {en: "Was the system substantially modified, rebranded or given a new purpose? (yes or no)"}}
+    - {name: provider_status_decision, source: human, label: {en: "Decision on provider status (legal)"}}
+    - {name: provider_status_rationale, source: human, label: {en: "Legal rationale for the provider-status decision"}}
+  layout:
+    - title: {en: "Changes detected", es: "Cambios detectados"}
+      rows:
+        - {label: {en: "Agent", es: "Agente"}, field: agent_name}
+        - {label: {en: "Model deployments", es: "Despliegues de modelos"}, field: model_deployments}
+        - {label: {en: "Fine-tuned model in use", es: "Modelo ajustado (fine-tuning) en uso"}, field: fine_tuned}
+        - {label: {en: "Last modified", es: "Última modificación"}, field: modified_at}
+    - title: {en: "Assessment", es: "Evaluación"}
+      rows:
+        - {label: {en: "Substantial modification, rebranding or new purpose", es: "Modificación sustancial, cambio de marca o nueva finalidad"}, field: substantial_modification}
+        - {label: {en: "Decision", es: "Decisión"}, field: provider_status_decision}
+        - {label: {en: "Rationale", es: "Justificación"}, field: provider_status_rationale}
+  basis:
+    en: "Regulation (EU) 2024/1689, Article 25. A deployer that makes a substantial modification, changes the intended purpose or puts its name on a high-risk system may be treated as a provider. Legal decision required."
+    es: "Reglamento (UE) 2024/1689, artículo 25. Un responsable del despliegue que realice una modificación sustancial, cambie la finalidad prevista o ponga su nombre en un sistema de alto riesgo puede ser considerado proveedor. Se requiere decisión jurídica."
+
+- id: literacy-record
+  rule: AIA-4-LITERACY
+  template_reviewed_by: ""
+  titles: {en: "AI literacy record (Art. 4)", es: "Registro de alfabetización en IA (art. 4)"}
+  fields:
+    - {name: agent_name, source: fact, key: name}
+    - {name: access_users, source: fact, key: accessUsers}
+    - {name: literacy_gaps, source: fact, key: literacyGaps}
+    - {name: check_result, source: rule_result}
+    - {name: training_programme, source: human, label: {en: "Training programme and course content"}}
+    - {name: training_review_date, source: human, label: {en: "Next review date of the training"}}
+  layout:
+    - title: {en: "Who uses the agent", es: "Quién usa el agente"}
+      rows:
+        - {label: {en: "Agent", es: "Agente"}, field: agent_name}
+        - {label: {en: "Users and overseers with access", es: "Usuarios y supervisores con acceso"}, field: access_users}
+    - title: {en: "Training status", es: "Estado de la formación"}
+      rows:
+        - {label: {en: "Check result (pass, fail, unknown)", es: "Resultado de la verificación (pass, fail, unknown)"}, field: check_result}
+        - {label: {en: "People with no recorded training", es: "Personas sin formación registrada"}, field: literacy_gaps}
+        - {label: {en: "Training programme", es: "Programa de formación"}, field: training_programme}
+        - {label: {en: "Next review", es: "Próxima revisión"}, field: training_review_date}
+  basis:
+    en: "Regulation (EU) 2024/1689, Article 4, as amended by Regulation (EU) 2026/1744. Counsel to confirm the current scope of this duty for deployers."
+    es: "Reglamento (UE) 2024/1689, artículo 4, modificado por el Reglamento (UE) 2026/1744. El asesor jurídico debe confirmar el alcance actual de esta obligación para los responsables del despliegue."
+
+- id: oversight-record
+  rule: AIA-26-2-OVERSIGHT
+  template_reviewed_by: ""
+  titles: {en: "Human oversight assignment (Art. 14, Art. 26(2))", es: "Asignación de supervisión humana (arts. 14 y 26.2)"}
+  fields:
+    - {name: agent_name, source: fact, key: name}
+    - {name: overseers, source: fact, key: overseers}
+    - {name: owner, source: fact, key: owner}
+    - {name: sponsor, source: fact, key: sponsor}
+    - {name: overseer_competence, source: human, label: {en: "Competence, training and authority of each overseer"}}
+    - {name: authority_to_stop, source: human, label: {en: "How and by whom the agent can be stopped"}}
+    - {name: approval_steps, source: human, label: {en: "Approval steps before the agent acts"}}
+  layout:
+    - title: {en: "Assignment", es: "Asignación"}
+      rows:
+        - {label: {en: "Agent", es: "Agente"}, field: agent_name}
+        - {label: {en: "Named overseers", es: "Supervisores designados"}, field: overseers}
+        - {label: {en: "Owner", es: "Responsable"}, field: owner}
+        - {label: {en: "Sponsor", es: "Patrocinador"}, field: sponsor}
+    - title: {en: "Competence and authority", es: "Competencia y autoridad"}
+      rows:
+        - {label: {en: "Competence, training, authority", es: "Competencia, formación y autoridad"}, field: overseer_competence}
+        - {label: {en: "Authority to stop the agent", es: "Autoridad para detener el agente"}, field: authority_to_stop}
+        - {label: {en: "Approval steps", es: "Pasos de aprobación"}, field: approval_steps}
+  basis:
+    en: "Regulation (EU) 2024/1689, Articles 14 and 26(2): human oversight must be assigned to natural persons with the necessary competence, training and authority."
+    es: "Reglamento (UE) 2024/1689, artículos 14 y 26.2: la supervisión humana debe encomendarse a personas físicas con la competencia, formación y autoridad necesarias."
+
+- id: log-retention-attestation
+  rule: AIA-26-6-LOG-RETENTION
+  template_reviewed_by: ""
+  titles: {en: "Log retention attestation (Art. 26(6))", es: "Atestación de conservación de registros (art. 26.6)"}
+  fields:
+    - {name: agent_name, source: fact, key: name}
+    - {name: retention_days, source: fact, key: retentionDays}
+    - {name: min_retention_days, source: fact, key: minRetentionDays}
+    - {name: check_result, source: rule_result}
+    - {name: minimisation_signoff, source: human, label: {en: "Data-minimisation sign-off (GDPR) for the log retention period"}}
+  layout:
+    - title: {en: "Retention by log source (days)", es: "Conservación por fuente de registros (días)"}
+      rows:
+        - {label: {en: "Agent", es: "Agente"}, field: agent_name}
+        - {label: {en: "Retention by source", es: "Conservación por fuente"}, field: retention_days}
+        - {label: {en: "Shortest retention", es: "Conservación más corta"}, field: min_retention_days}
+        - {label: {en: "Check against the 6-month minimum (183 days)", es: "Verificación del mínimo de 6 meses (183 días)"}, field: check_result}
+        - {label: {en: "Data-minimisation sign-off", es: "Validación de minimización de datos"}, field: minimisation_signoff}
+  basis:
+    en: "Regulation (EU) 2024/1689, Article 26(6): logs automatically generated by a high-risk system are kept for a period appropriate to the intended purpose and at least six months, unless other law provides otherwise. The day count used here is for counsel to confirm."
+    es: "Reglamento (UE) 2024/1689, artículo 26.6: los registros generados automáticamente por un sistema de alto riesgo se conservan durante un período adecuado a la finalidad prevista y, como mínimo, seis meses, salvo que otra norma disponga otra cosa. El número de días utilizado debe confirmarlo el asesor jurídico."
+
+- id: worker-notice
+  rule: AIA-26-7-WORKER-NOTICE
+  template_reviewed_by: ""
+  titles: {en: "Notice to workers and their representatives (Art. 26(7))", es: "Información a los trabajadores y sus representantes (art. 26.7)"}
+  fields:
+    - {name: agent_name, source: fact, key: name}
+    - {name: controller_name, source: human, label: {en: "Employer name"}}
+    - {name: affected_groups, source: fact, key: affectedGroups}
+    - {name: agent_description, source: llm}
+    - {name: oversight_contact, source: human, label: {en: "Contact person for questions about the system"}}
+    - {name: works_council_consulted, source: human, label: {en: "Works council or workers' representatives consulted (yes or no, with date)"}}
+  layout:
+    - title: {en: "Notice", es: "Información"}
+      text:
+        en: "Before this AI system is put into use at the workplace, the employer informs workers' representatives and the affected workers that they will be subject to its use."
+        es: "Antes de poner en uso este sistema de IA en el lugar de trabajo, el empleador informa a los representantes de los trabajadores y a los trabajadores afectados de que estarán sujetos a su utilización."
+      rows:
+        - {label: {en: "Employer", es: "Empleador"}, field: controller_name}
+        - {label: {en: "System", es: "Sistema"}, field: agent_name}
+        - {label: {en: "Teams or groups affected", es: "Equipos o grupos afectados"}, field: affected_groups}
+        - {label: {en: "What the system does", es: "Qué hace el sistema"}, field: agent_description}
+        - {label: {en: "Contact", es: "Contacto"}, field: oversight_contact}
+        - {label: {en: "Representatives consulted", es: "Representantes consultados"}, field: works_council_consulted}
+  basis:
+    en: "Regulation (EU) 2024/1689, Article 26(7). HR and legal review against national labour rules is required before sending."
+    es: "Reglamento (UE) 2024/1689, artículo 26.7. Antes de enviarla se requiere revisión de RR. HH. y del área jurídica conforme a la normativa laboral nacional."
+
+- id: affected-person-notice
+  rule: AIA-26-11-AFFECTED-PERSON
+  template_reviewed_by: ""
+  titles: {en: "Notice to persons subject to decisions (Art. 26(11))", es: "Información a las personas sujetas a decisiones (art. 26.11)"}
+  fields:
+    - {name: agent_name, source: fact, key: name}
+    - {name: controller_name, source: human, label: {en: "Organisation name"}}
+    - {name: agent_description, source: llm}
+    - {name: decision_type, source: human, label: {en: "Type of decision the agent helps to make about people"}}
+    - {name: contact_point, source: human, label: {en: "Contact point for affected persons"}}
+    - {name: rights_text, source: human, label: {en: "Statement of rights (approved by legal)"}}
+  layout:
+    - title: {en: "Notice", es: "Información"}
+      text:
+        en: "This organisation uses an AI system to help take or support decisions that concern you."
+        es: "Esta organización utiliza un sistema de IA para ayudar a adoptar o apoyar decisiones que le conciernen."
+      rows:
+        - {label: {en: "Organisation", es: "Organización"}, field: controller_name}
+        - {label: {en: "System", es: "Sistema"}, field: agent_name}
+        - {label: {en: "What the system does", es: "Qué hace el sistema"}, field: agent_description}
+        - {label: {en: "Type of decision", es: "Tipo de decisión"}, field: decision_type}
+        - {label: {en: "Contact point", es: "Punto de contacto"}, field: contact_point}
+        - {label: {en: "Your rights", es: "Sus derechos"}, field: rights_text}
+  basis:
+    en: "Regulation (EU) 2024/1689, Article 26(11). Wording to be approved by legal before use."
+    es: "Reglamento (UE) 2024/1689, artículo 26.11. La redacción debe aprobarla el área jurídica antes de su uso."
+
+- id: dpia-input-pack
+  rule: GDPR-35-DPIA
+  template_reviewed_by: ""
+  titles: {en: "DPIA input pack (GDPR Art. 35, AI Act Art. 26(9))", es: "Dossier de entrada para la EIPD (RGPD art. 35, Reglamento de IA art. 26.9)"}
+  fields:
+    - {name: agent_name, source: fact, key: name}
+    - {name: data_categories, source: fact, key: dataCategories}
+    - {name: sensitivity_labels, source: fact, key: sensitivityLabels}
+    - {name: knowledge_sources, source: fact, key: knowledgeSources}
+    - {name: connectors, source: fact, key: connectors}
+    - {name: processing_purposes, source: human, label: {en: "Purposes of the processing"}}
+    - {name: necessity_proportionality, source: human, label: {en: "Necessity and proportionality"}}
+    - {name: risks_to_individuals, source: human, label: {en: "Risks to the rights and freedoms of individuals"}}
+    - {name: safeguards, source: human, label: {en: "Measures and safeguards"}}
+    - {name: dpo_assessment, source: human, label: {en: "Data protection officer's assessment and advice"}}
+  layout:
+    - title: {en: "Processing as observed", es: "Tratamiento observado"}
+      rows:
+        - {label: {en: "Agent", es: "Agente"}, field: agent_name}
+        - {label: {en: "Data categories (observed)", es: "Categorías de datos (observadas)"}, field: data_categories}
+        - {label: {en: "Sensitivity labels", es: "Etiquetas de sensibilidad"}, field: sensitivity_labels}
+        - {label: {en: "Data sources", es: "Fuentes de datos"}, field: knowledge_sources}
+        - {label: {en: "Connected systems", es: "Sistemas conectados"}, field: connectors}
+    - title: {en: "Assessment (to be completed by the DPO)", es: "Evaluación (a completar por el DPD)"}
+      rows:
+        - {label: {en: "Purposes", es: "Finalidades"}, field: processing_purposes}
+        - {label: {en: "Necessity and proportionality", es: "Necesidad y proporcionalidad"}, field: necessity_proportionality}
+        - {label: {en: "Risks to individuals", es: "Riesgos para las personas"}, field: risks_to_individuals}
+        - {label: {en: "Measures and safeguards", es: "Medidas y garantías"}, field: safeguards}
+        - {label: {en: "DPO assessment", es: "Valoración del DPD"}, field: dpo_assessment}
+  basis:
+    en: "Regulation (EU) 2016/679, Article 35, and Regulation (EU) 2024/1689, Article 26(9). This pack is an input to the data protection impact assessment, not the assessment itself."
+    es: "Reglamento (UE) 2016/679, artículo 35, y Reglamento (UE) 2024/1689, artículo 26.9. Este dossier es un insumo de la evaluación de impacto relativa a la protección de datos, no la evaluación en sí."
+
+- id: breach-notification-draft
+  rule: GDPR-33-BREACH
+  template_reviewed_by: ""
+  titles: {en: "Personal data breach notification draft (GDPR Art. 33)", es: "Borrador de notificación de violación de seguridad de los datos (RGPD art. 33)"}
+  fields:
+    - {name: agent_name, source: fact, key: name}
+    - {name: incident_id, source: incident, key: id}
+    - {name: incident_title, source: incident, key: title}
+    - {name: detected_time, source: incident, key: detectedTime}
+    - {name: incident_description, source: incident, key: description}
+    - {name: notify_by, source: deadline, key: detectedTime, hours: 72}
+    - {name: controller_name, source: human, label: {en: "Controller name"}}
+    - {name: controller_contact, source: human, label: {en: "Data protection officer or contact point"}}
+    - {name: breach_nature, source: human, label: {en: "Nature of the breach: categories and approximate number of individuals and records"}}
+    - {name: likely_consequences, source: human, label: {en: "Likely consequences of the breach"}}
+    - {name: measures_taken, source: human, label: {en: "Measures taken or proposed"}}
+  layout:
+    - title: {en: "Incident", es: "Incidente"}
+      rows:
+        - {label: {en: "Incident", es: "Incidente"}, field: incident_id}
+        - {label: {en: "Title", es: "Título"}, field: incident_title}
+        - {label: {en: "Agent", es: "Agente"}, field: agent_name}
+        - {label: {en: "Detected", es: "Detectado"}, field: detected_time}
+        - {label: {en: "Notify the authority by (72 hours after detection; awareness time to be confirmed)", es: "Notificar a la autoridad antes de (72 horas desde la detección; momento de conocimiento por confirmar)"}, field: notify_by}
+        - {label: {en: "Facts known", es: "Hechos conocidos"}, field: incident_description}
+    - title: {en: "Content required by Art. 33(3)", es: "Contenido exigido por el art. 33.3"}
+      rows:
+        - {label: {en: "Controller", es: "Responsable"}, field: controller_name}
+        - {label: {en: "Contact point", es: "Punto de contacto"}, field: controller_contact}
+        - {label: {en: "Nature of the breach", es: "Naturaleza de la violación"}, field: breach_nature}
+        - {label: {en: "Likely consequences", es: "Posibles consecuencias"}, field: likely_consequences}
+        - {label: {en: "Measures taken or proposed", es: "Medidas adoptadas o propuestas"}, field: measures_taken}
+  basis:
+    en: "Regulation (EU) 2016/679, Article 33. Draft for the data protection officer. Submission to the supervisory authority is a human decision."
+    es: "Reglamento (UE) 2016/679, artículo 33. Borrador para el delegado de protección de datos. La presentación ante la autoridad de control es una decisión humana."
+
+- id: serious-incident-report
+  rule: AIA-73-INCIDENT
+  template_reviewed_by: ""
+  titles: {en: "Serious incident report (Art. 73)", es: "Informe de incidente grave (art. 73)"}
+  fields:
+    - {name: agent_name, source: fact, key: name}
+    - {name: incident_id, source: incident, key: id}
+    - {name: incident_title, source: incident, key: title}
+    - {name: detected_time, source: incident, key: detectedTime}
+    - {name: incident_description, source: incident, key: description}
+    - {name: general_deadline, source: deadline, key: detectedTime, hours: 360}
+    - {name: model_deployments, source: fact, key: modelDeployments}
+    - {name: provider_contact, source: human, label: {en: "Provider of the AI system (name and contact)"}}
+    - {name: severity_decision, source: human, label: {en: "Legal decision on whether this is a serious incident, with reasons"}}
+    - {name: causal_link, source: human, label: {en: "Assessment of the link between the system and the incident"}}
+    - {name: corrective_measures, source: human, label: {en: "Corrective measures taken or planned"}}
+  layout:
+    - title: {en: "Incident facts", es: "Hechos del incidente"}
+      rows:
+        - {label: {en: "Incident", es: "Incidente"}, field: incident_id}
+        - {label: {en: "Title", es: "Título"}, field: incident_title}
+        - {label: {en: "Agent", es: "Agente"}, field: agent_name}
+        - {label: {en: "Model deployments", es: "Despliegues de modelos"}, field: model_deployments}
+        - {label: {en: "Detected", es: "Detectado"}, field: detected_time}
+        - {label: {en: "General time limit (15 days after awareness; shorter limits apply in some cases, counsel to confirm)", es: "Plazo general (15 días desde el conocimiento; en algunos casos se aplican plazos más cortos, a confirmar por el asesor jurídico)"}, field: general_deadline}
+        - {label: {en: "Facts known", es: "Hechos conocidos"}, field: incident_description}
+    - title: {en: "Assessment", es: "Evaluación"}
+      rows:
+        - {label: {en: "Provider", es: "Proveedor"}, field: provider_contact}
+        - {label: {en: "Serious incident decision", es: "Decisión sobre incidente grave"}, field: severity_decision}
+        - {label: {en: "Link to the system", es: "Relación con el sistema"}, field: causal_link}
+        - {label: {en: "Corrective measures", es: "Medidas correctivas"}, field: corrective_measures}
+  basis:
+    en: "Regulation (EU) 2024/1689, Article 73 and Article 26(5). A deployer that identifies a serious incident informs the provider first. Legal review and the severity decision are required before any report."
+    es: "Reglamento (UE) 2024/1689, artículo 73 y artículo 26.5. El responsable del despliegue que detecte un incidente grave informa primero al proveedor. Antes de cualquier comunicación se requieren revisión jurídica y la decisión sobre la gravedad."

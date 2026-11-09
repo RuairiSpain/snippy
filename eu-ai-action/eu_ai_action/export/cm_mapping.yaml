@@ -1,0 +1,26 @@
+# How approved documents are written into a Microsoft Purview Compliance Manager Excel export.
+# Compliance Manager has no public API for this (see MVP_PLAN.md section 8a): a person uploads the filled workbook.
+# UNVERIFIED: the column headers and status values below are assumptions. Compare them with the Excel file exported
+# from your tenant (Improvement actions > Export) and edit this file before relying on the output.
+columns:
+  action: "Improvement action"            # column holding the action name (searched for keywords)
+  implementation_status: "Implementation status"
+  test_status: "Test status"
+  notes: "Implementation notes"
+status_values:
+  implemented: "Implemented"
+  not_implemented: "Not implemented"
+  passed: "Passed"
+  failed: "Failed"
+  not_assessed: "Not assessed"
+# rule id -> keywords searched (case-insensitive) in the action name column
+actions:
+  AIA-50-1-disclosure: ["transparency", "article 50", "art. 50", "disclos"]
+  AIA-REGISTER-ENTRY: ["inventory", "register", "ai system"]
+  GDPR-30-ROPA: ["record of processing", "article 30", "art. 30", "ropa"]
+  AIA-4-LITERACY: ["literacy", "article 4", "training"]
+  AIA-26-2-OVERSIGHT: ["human oversight", "oversight"]
+  AIA-26-6-LOG-RETENTION: ["log", "retention"]
+  GDPR-35-DPIA: ["impact assessment", "dpia", "article 35"]
+  AIA-27-FRIA: ["fundamental rights"]
+  AIA-73-INCIDENT: ["serious incident"]

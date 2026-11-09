@@ -1,0 +1,504 @@
+# v2 documents. Not reviewed by counsel (template_reviewed_by empty). Deadlines are computed from incident timestamps
+# and must be confirmed by counsel and, for DORA and NIS2, against the national authority's current requirements.
+
+- id: risk-notice-suspension
+  rule: AIA-79-RISK-NOTICE
+  template_reviewed_by: ""
+  titles: {en: "Risk notice and suspension record (Art. 26(5), Art. 79)", es: "Registro de aviso de riesgo y suspensión (arts. 26.5 y 79)"}
+  fields:
+    - {name: agent_name, source: fact, key: name}
+    - {name: incident_id, source: incident, key: id}
+    - {name: incident_title, source: incident, key: title}
+    - {name: detected_time, source: incident, key: detectedTime}
+    - {name: incident_severity, source: incident, key: severity}
+    - {name: incident_description, source: incident, key: description}
+    - {name: suspension_decision, source: human, label: {en: "Decision to suspend or continue use, with reasons"}}
+    - {name: action_taken, source: human, label: {en: "Action taken (for example agent blocked) and by whom"}}
+    - {name: notified_parties, source: human, label: {en: "Provider, distributor and authority informed, with dates"}}
+  layout:
+    - title: {en: "Timeline", es: "Cronología"}
+      rows:
+        - {label: {en: "Agent", es: "Agente"}, field: agent_name}
+        - {label: {en: "Incident", es: "Incidente"}, field: incident_id}
+        - {label: {en: "Title", es: "Título"}, field: incident_title}
+        - {label: {en: "Severity", es: "Gravedad"}, field: incident_severity}
+        - {label: {en: "Detected", es: "Detectado"}, field: detected_time}
+        - {label: {en: "Facts known", es: "Hechos conocidos"}, field: incident_description}
+    - title: {en: "Decision and notification", es: "Decisión y comunicación"}
+      rows:
+        - {label: {en: "Decision", es: "Decisión"}, field: suspension_decision}
+        - {label: {en: "Action taken", es: "Medida adoptada"}, field: action_taken}
+        - {label: {en: "Parties informed", es: "Partes informadas"}, field: notified_parties}
+  basis:
+    en: "Regulation (EU) 2024/1689, Articles 26(5) and 79."
+    es: "Reglamento (UE) 2024/1689, artículos 26.5 y 79."
+
+- id: decision-explanation
+  rule: AIA-86-EXPLANATION
+  template_reviewed_by: ""
+  titles: {en: "Explanation of an individual decision (Art. 86)", es: "Explicación de una decisión individual (art. 86)"}
+  fields:
+    - {name: agent_name, source: fact, key: name}
+    - {name: controller_name, source: human, label: {en: "Organisation name"}}
+    - {name: person_reference, source: human, label: {en: "Reference of the person and request"}}
+    - {name: decision_description, source: human, label: {en: "The decision taken"}}
+    - {name: inputs_used, source: human, label: {en: "Main inputs used (from the interaction record)"}}
+    - {name: agent_role, source: human, label: {en: "Role of the AI system in the decision"}}
+    - {name: reviewer_explanation, source: human, label: {en: "Reviewer's explanation of the final decision"}}
+    - {name: human_reviewer, source: human, label: {en: "Human reviewer"}}
+  layout:
+    - title: {en: "Explanation", es: "Explicación"}
+      rows:
+        - {label: {en: "Organisation", es: "Organización"}, field: controller_name}
+        - {label: {en: "Person and request", es: "Persona y solicitud"}, field: person_reference}
+        - {label: {en: "System", es: "Sistema"}, field: agent_name}
+        - {label: {en: "Decision", es: "Decisión"}, field: decision_description}
+        - {label: {en: "Role of the AI system", es: "Papel del sistema de IA"}, field: agent_role}
+        - {label: {en: "Main inputs used", es: "Principales datos utilizados"}, field: inputs_used}
+        - {label: {en: "Explanation of the final decision", es: "Explicación de la decisión final"}, field: reviewer_explanation}
+        - {label: {en: "Human reviewer", es: "Persona que revisó"}, field: human_reviewer}
+  basis:
+    en: "Regulation (EU) 2024/1689, Article 86. The inputs come from interaction records, which this product does not collect in the MVP: a person copies them in. Review by the human reviewer is required."
+    es: "Reglamento (UE) 2024/1689, artículo 86. Los datos de entrada proceden de los registros de interacción, que este producto no recoge en el MVP: una persona los copia. Se requiere la revisión de la persona responsable."
+
+- id: fria
+  rule: AIA-27-FRIA
+  template_reviewed_by: ""
+  titles: {en: "Fundamental rights impact assessment (Art. 27)", es: "Evaluación de impacto en los derechos fundamentales (art. 27)"}
+  fields:
+    - {name: agent_name, source: fact, key: name}
+    - {name: business_purpose, source: human, label: {en: "Business purpose"}}
+    - {name: risk_tier, source: human, label: {en: "Confirmed risk tier (minimal, limited, high or prohibited-concern)"}}
+    - {name: use_description, source: human, label: {en: "Processes in which the system is used, and how"}}
+    - {name: use_period_frequency, source: human, label: {en: "Period and frequency of use"}}
+    - {name: persons_affected, source: human, label: {en: "Categories of persons and groups likely to be affected"}}
+    - {name: user_groups, source: fact, key: affectedGroups}
+    - {name: risks_to_rights, source: human, label: {en: "Specific risks of harm to those persons"}}
+    - {name: overseers, source: fact, key: overseers}
+    - {name: mitigation_measures, source: human, label: {en: "Measures if the risks materialise, including governance and complaints"}}
+    - {name: complaint_process, source: human, label: {en: "Complaint process for affected persons"}}
+    - {name: evaluations, source: fact, key: evaluations}
+  layout:
+    - title: {en: "Use of the system (Art. 27(1)(a)-(b))", es: "Uso del sistema (art. 27.1.a-b)"}
+      rows:
+        - {label: {en: "System", es: "Sistema"}, field: agent_name}
+        - {label: {en: "Purpose", es: "Finalidad"}, field: business_purpose}
+        - {label: {en: "Risk tier", es: "Nivel de riesgo"}, field: risk_tier}
+        - {label: {en: "Processes in which it is used", es: "Procesos en los que se usa"}, field: use_description}
+        - {label: {en: "Period and frequency", es: "Período y frecuencia"}, field: use_period_frequency}
+    - title: {en: "Affected persons and risks (Art. 27(1)(c)-(d))", es: "Personas afectadas y riesgos (art. 27.1.c-d)"}
+      rows:
+        - {label: {en: "Persons and groups likely to be affected", es: "Personas y colectivos que pueden verse afectados"}, field: persons_affected}
+        - {label: {en: "Groups with access (observed)", es: "Grupos con acceso (observado)"}, field: user_groups}
+        - {label: {en: "Risks of harm", es: "Riesgos de perjuicio"}, field: risks_to_rights}
+        - {label: {en: "Evaluation evidence", es: "Evidencia de evaluación"}, field: evaluations}
+    - title: {en: "Oversight and remedies (Art. 27(1)(e)-(f))", es: "Supervisión y remedios (art. 27.1.e-f)"}
+      rows:
+        - {label: {en: "Human oversight (observed)", es: "Supervisión humana (observada)"}, field: overseers}
+        - {label: {en: "Measures if risks materialise", es: "Medidas si los riesgos se materializan"}, field: mitigation_measures}
+        - {label: {en: "Complaint process", es: "Procedimiento de reclamación"}, field: complaint_process}
+  basis:
+    en: "Regulation (EU) 2024/1689, Article 27. Required for deployers that are public bodies, private entities providing public services, or use systems for credit scoring or life and health insurance pricing. The judgement of rights impact is human; this document structures the evidence."
+    es: "Reglamento (UE) 2024/1689, artículo 27. Obligatoria para los responsables del despliegue que sean organismos públicos, entidades privadas que presten servicios públicos o utilicen sistemas de puntuación crediticia o de fijación de precios de seguros de vida y salud. La valoración del impacto en los derechos es humana; este documento estructura la evidencia."
+
+- id: eu-database-registration
+  rule: AIA-49-DB-REGISTRATION
+  template_reviewed_by: ""
+  titles: {en: "EU database registration record (Art. 26(8), Art. 49(3))", es: "Registro para la base de datos de la UE (arts. 26.8 y 49.3)"}
+  fields:
+    - {name: agent_name, source: fact, key: name}
+    - {name: controller_name, source: human, label: {en: "Deployer (public authority) name"}}
+    - {name: business_purpose, source: human, label: {en: "Business purpose"}}
+    - {name: risk_tier, source: human, label: {en: "Confirmed risk tier (minimal, limited, high or prohibited-concern)"}}
+    - {name: annex_iii_area, source: human, label: {en: "Annex III area, if high-risk"}}
+    - {name: provider_contact, source: human, label: {en: "Provider of the AI system (name and contact)"}}
+    - {name: registration_reference, source: human, label: {en: "Reference of the provider's registration in the EU database"}}
+  layout:
+    - title: {en: "Registration data", es: "Datos de registro"}
+      rows:
+        - {label: {en: "Deployer", es: "Responsable del despliegue"}, field: controller_name}
+        - {label: {en: "System", es: "Sistema"}, field: agent_name}
+        - {label: {en: "Purpose", es: "Finalidad"}, field: business_purpose}
+        - {label: {en: "Risk tier", es: "Nivel de riesgo"}, field: risk_tier}
+        - {label: {en: "Annex III area", es: "Ámbito del anexo III"}, field: annex_iii_area}
+        - {label: {en: "Provider", es: "Proveedor"}, field: provider_contact}
+        - {label: {en: "Registration reference", es: "Referencia de registro"}, field: registration_reference}
+  basis:
+    en: "Regulation (EU) 2024/1689, Articles 26(8) and 49(3). The authority submits the entry; this record prepares the data."
+    es: "Reglamento (UE) 2024/1689, artículos 26.8 y 49.3. La autoridad presenta la entrada; este registro prepara los datos."
+
+- id: synthetic-content-marking-check
+  rule: AIA-50-2-MARKING
+  template_reviewed_by: ""
+  titles: {en: "Synthetic content marking check (Art. 50(2))", es: "Verificación del marcado de contenido sintético (art. 50.2)"}
+  fields:
+    - {name: agent_name, source: fact, key: name}
+    - {name: content_types, source: fact, key: syntheticContentTypes}
+    - {name: model_deployments, source: fact, key: modelDeployments}
+    - {name: check_result, source: rule_result}
+    - {name: marking_method, source: human, label: {en: "Technical method used to mark generated content"}}
+  layout:
+    - title: {en: "Check", es: "Verificación"}
+      rows:
+        - {label: {en: "Agent", es: "Agente"}, field: agent_name}
+        - {label: {en: "Content types generated", es: "Tipos de contenido generado"}, field: content_types}
+        - {label: {en: "Model deployments", es: "Despliegues de modelos"}, field: model_deployments}
+        - {label: {en: "Content marking configured (pass, fail, unknown)", es: "Marcado de contenido configurado (pass, fail, unknown)"}, field: check_result}
+        - {label: {en: "Marking method", es: "Método de marcado"}, field: marking_method}
+  basis:
+    en: "Regulation (EU) 2024/1689, Article 50(2): providers of systems generating synthetic audio, image, video or text ensure outputs are marked in a machine-readable format. Applies from 2 December 2026 to systems already on the market."
+    es: "Reglamento (UE) 2024/1689, artículo 50.2: los proveedores de sistemas que generen contenido sintético de audio, imagen, vídeo o texto garantizarán que los resultados se marquen en un formato legible por máquina. Se aplica desde el 2 de diciembre de 2026 a los sistemas ya comercializados."
+
+- id: public-text-disclosure
+  rule: AIA-50-4-PUBLIC-TEXT
+  template_reviewed_by: ""
+  titles: {en: "Disclosure for AI-generated public-interest content (Art. 50(4))", es: "Divulgación de contenido generado por IA de interés público (art. 50.4)"}
+  fields:
+    - {name: agent_name, source: fact, key: name}
+    - {name: content_type, source: human, label: {en: "Type of content published"}}
+    - {name: publishing_channel, source: human, label: {en: "Channel where it is published"}}
+    - {name: label_wording, source: human, label: {en: "Disclosure label wording"}}
+    - {name: editorial_review, source: human, label: {en: "Human review or editorial responsibility"}}
+  layout:
+    - title: {en: "Disclosure", es: "Divulgación"}
+      rows:
+        - {label: {en: "Agent", es: "Agente"}, field: agent_name}
+        - {label: {en: "Content", es: "Contenido"}, field: content_type}
+        - {label: {en: "Channel", es: "Canal"}, field: publishing_channel}
+        - {label: {en: "Label", es: "Etiqueta"}, field: label_wording}
+        - {label: {en: "Editorial review", es: "Revisión editorial"}, field: editorial_review}
+  basis:
+    en: "Regulation (EU) 2024/1689, Article 50(4). Applies to deployers that publish AI-generated text to inform the public on matters of public interest, unless it was reviewed by a person who holds editorial responsibility."
+    es: "Reglamento (UE) 2024/1689, artículo 50.4. Se aplica a los responsables del despliegue que publiquen texto generado por IA para informar al público sobre asuntos de interés público, salvo que lo haya revisado una persona con responsabilidad editorial."
+
+- id: input-data-relevance
+  rule: AIA-26-4-INPUT-DATA
+  template_reviewed_by: ""
+  titles: {en: "Input data relevance note (Art. 26(4))", es: "Nota de pertinencia de los datos de entrada (art. 26.4)"}
+  fields:
+    - {name: agent_name, source: fact, key: name}
+    - {name: knowledge_sources, source: fact, key: knowledgeSources}
+    - {name: sensitivity_labels, source: fact, key: sensitivityLabels}
+    - {name: modified_at, source: fact, key: modifiedAt}
+    - {name: relevance_judgement, source: human, label: {en: "Are the input data relevant for the intended purpose?"}}
+    - {name: representativeness, source: human, label: {en: "Are the input data sufficiently representative?"}}
+  layout:
+    - title: {en: "Input data as observed", es: "Datos de entrada observados"}
+      rows:
+        - {label: {en: "Agent", es: "Agente"}, field: agent_name}
+        - {label: {en: "Knowledge sources", es: "Fuentes de conocimiento"}, field: knowledge_sources}
+        - {label: {en: "Sensitivity labels", es: "Etiquetas de sensibilidad"}, field: sensitivity_labels}
+        - {label: {en: "Configuration last modified", es: "Configuración modificada por última vez"}, field: modified_at}
+    - title: {en: "Judgement", es: "Valoración"}
+      rows:
+        - {label: {en: "Relevance", es: "Pertinencia"}, field: relevance_judgement}
+        - {label: {en: "Representativeness", es: "Representatividad"}, field: representativeness}
+  basis:
+    en: "Regulation (EU) 2024/1689, Article 26(4), to the extent the deployer controls the input data."
+    es: "Reglamento (UE) 2024/1689, artículo 26.4, en la medida en que el responsable del despliegue controle los datos de entrada."
+
+- id: instructions-for-use-check
+  rule: AIA-26-1-INSTRUCTIONS
+  template_reviewed_by: ""
+  titles: {en: "Instructions-for-use compliance check (Art. 26(1))", es: "Verificación del cumplimiento de las instrucciones de uso (art. 26.1)"}
+  fields:
+    - {name: agent_name, source: fact, key: name}
+    - {name: model_deployments, source: fact, key: modelDeployments}
+    - {name: modified_at, source: fact, key: modifiedAt}
+    - {name: instructions_summary, source: human, label: {en: "Summary of the provider's instructions for use"}}
+    - {name: configuration_deviations, source: human, label: {en: "Deviations of the current configuration from the instructions"}}
+    - {name: reviewer, source: human, label: {en: "Reviewer"}}
+  layout:
+    - title: {en: "Configuration", es: "Configuración"}
+      rows:
+        - {label: {en: "Agent", es: "Agente"}, field: agent_name}
+        - {label: {en: "Model deployments", es: "Despliegues de modelos"}, field: model_deployments}
+        - {label: {en: "Last modified", es: "Última modificación"}, field: modified_at}
+    - title: {en: "Comparison with the provider's instructions", es: "Comparación con las instrucciones del proveedor"}
+      rows:
+        - {label: {en: "Instructions (summary)", es: "Instrucciones (resumen)"}, field: instructions_summary}
+        - {label: {en: "Deviations", es: "Desviaciones"}, field: configuration_deviations}
+        - {label: {en: "Reviewer", es: "Persona que revisa"}, field: reviewer}
+  basis:
+    en: "Regulation (EU) 2024/1689, Article 26(1)."
+    es: "Reglamento (UE) 2024/1689, artículo 26.1."
+
+- id: automated-decision-safeguards
+  rule: GDPR-22-AUTOMATED-DECISIONS
+  template_reviewed_by: ""
+  titles: {en: "Automated decision-making safeguards record (GDPR Art. 22)", es: "Registro de garantías en decisiones automatizadas (RGPD art. 22)"}
+  fields:
+    - {name: agent_name, source: fact, key: name}
+    - {name: overseers, source: fact, key: overseers}
+    - {name: decision_description, source: human, label: {en: "Decisions the agent takes or supports"}}
+    - {name: lawful_exception, source: human, label: {en: "Exception relied on under Art. 22(2) (contract, law or explicit consent)"}}
+    - {name: human_intervention, source: human, label: {en: "How a person can intervene"}}
+    - {name: contest_mechanism, source: human, label: {en: "How individuals can express their view and contest the decision"}}
+  layout:
+    - title: {en: "Safeguards", es: "Garantías"}
+      rows:
+        - {label: {en: "Agent", es: "Agente"}, field: agent_name}
+        - {label: {en: "Decisions", es: "Decisiones"}, field: decision_description}
+        - {label: {en: "Exception relied on", es: "Excepción invocada"}, field: lawful_exception}
+        - {label: {en: "Named overseers (observed)", es: "Supervisores designados (observado)"}, field: overseers}
+        - {label: {en: "Human intervention", es: "Intervención humana"}, field: human_intervention}
+        - {label: {en: "Contesting the decision", es: "Impugnación de la decisión"}, field: contest_mechanism}
+  basis:
+    en: "Regulation (EU) 2016/679, Article 22."
+    es: "Reglamento (UE) 2016/679, artículo 22."
+
+- id: dora-incident-report
+  rule: DORA-19-INCIDENT
+  template_reviewed_by: ""
+  titles: {en: "DORA major ICT incident report rows (Art. 19)", es: "Líneas de informe de incidente grave de TIC (DORA, art. 19)"}
+  fields:
+    - {name: agent_name, source: fact, key: name}
+    - {name: incident_id, source: incident, key: id}
+    - {name: incident_title, source: incident, key: title}
+    - {name: detected_time, source: incident, key: detectedTime}
+    - {name: classified_time, source: incident, key: classifiedTime}
+    - {name: incident_description, source: incident, key: description}
+    - {name: initial_deadline, source: deadline, key: classifiedTime, hours: 4}
+    - {name: initial_cap, source: deadline, key: detectedTime, hours: 24}
+    - {name: intermediate_deadline, source: deadline, key: classifiedTime, hours: 72}
+    - {name: final_deadline, source: deadline, key: classifiedTime, hours: 720}
+    - {name: model_deployments, source: fact, key: modelDeployments}
+    - {name: connectors, source: fact, key: connectors}
+    - {name: ict_impact, source: human, label: {en: "Impact: clients, transactions, services, duration"}}
+    - {name: third_party_provider, source: human, label: {en: "ICT third-party provider involved"}}
+    - {name: root_cause, source: human, label: {en: "Root cause and remediation"}}
+  layout:
+    - title: {en: "Incident", es: "Incidente"}
+      rows:
+        - {label: {en: "Incident", es: "Incidente"}, field: incident_id}
+        - {label: {en: "Title", es: "Título"}, field: incident_title}
+        - {label: {en: "Agent row", es: "Fila del agente"}, field: agent_name}
+        - {label: {en: "Model deployments", es: "Despliegues de modelos"}, field: model_deployments}
+        - {label: {en: "Connected systems", es: "Sistemas conectados"}, field: connectors}
+        - {label: {en: "Detected", es: "Detectado"}, field: detected_time}
+        - {label: {en: "Classified as major", es: "Clasificado como grave"}, field: classified_time}
+        - {label: {en: "Facts known", es: "Hechos conocidos"}, field: incident_description}
+    - title: {en: "Reporting clock (confirm against the current technical standards)", es: "Calendario de notificación (confirmar con las normas técnicas vigentes)"}
+      rows:
+        - {label: {en: "Initial notification: 4 hours after classification", es: "Notificación inicial: 4 horas tras la clasificación"}, field: initial_deadline}
+        - {label: {en: "Initial notification: no later than 24 hours after detection", es: "Notificación inicial: como máximo 24 horas tras la detección"}, field: initial_cap}
+        - {label: {en: "Intermediate report: 72 hours", es: "Informe intermedio: 72 horas"}, field: intermediate_deadline}
+        - {label: {en: "Final report: about 1 month (30 days used here)", es: "Informe final: aproximadamente 1 mes (aquí 30 días)"}, field: final_deadline}
+    - title: {en: "Assessment", es: "Evaluación"}
+      rows:
+        - {label: {en: "Impact", es: "Impacto"}, field: ict_impact}
+        - {label: {en: "Third-party provider", es: "Proveedor tercero de TIC"}, field: third_party_provider}
+        - {label: {en: "Root cause and remediation", es: "Causa raíz y remediación"}, field: root_cause}
+  basis:
+    en: "Regulation (EU) 2022/2554 (DORA), Article 19. Rows for the financial entity's incident report; submission is a human decision."
+    es: "Reglamento (UE) 2022/2554 (DORA), artículo 19. Líneas para el informe de incidentes de la entidad financiera; la presentación es una decisión humana."
+
+- id: dora-register-rows
+  rule: DORA-28-REGISTER
+  template_reviewed_by: ""
+  titles: {en: "DORA Register of Information rows (Art. 28(3))", es: "Líneas del Registro de Información (DORA, art. 28.3)"}
+  fields:
+    - {name: agent_name, source: fact, key: name}
+    - {name: model_providers, source: fact, key: modelProviders}
+    - {name: model_deployments, source: fact, key: modelDeployments}
+    - {name: connectors, source: fact, key: connectors}
+    - {name: contract_reference, source: human, label: {en: "Contractual arrangement reference"}}
+    - {name: function_supported, source: human, label: {en: "Function supported and whether it is critical or important"}}
+    - {name: provider_identifier, source: human, label: {en: "Provider legal entity identifier (LEI)"}}
+  layout:
+    - title: {en: "Third-party ICT arrangements used by the agent", es: "Acuerdos con terceros de TIC utilizados por el agente"}
+      rows:
+        - {label: {en: "Agent", es: "Agente"}, field: agent_name}
+        - {label: {en: "Model providers", es: "Proveedores de modelos"}, field: model_providers}
+        - {label: {en: "Model deployments", es: "Despliegues de modelos"}, field: model_deployments}
+        - {label: {en: "Connectors and tools", es: "Conectores y herramientas"}, field: connectors}
+        - {label: {en: "Contract reference", es: "Referencia del contrato"}, field: contract_reference}
+        - {label: {en: "Function supported", es: "Función soportada"}, field: function_supported}
+        - {label: {en: "Provider identifier", es: "Identificador del proveedor"}, field: provider_identifier}
+  basis:
+    en: "Regulation (EU) 2022/2554 (DORA), Article 28(3)."
+    es: "Reglamento (UE) 2022/2554 (DORA), artículo 28.3."
+
+- id: nis2-asset-entry
+  rule: NIS2-21-ASSET
+  template_reviewed_by: ""
+  titles: {en: "NIS2 asset register entry", es: "Entrada del inventario de activos (NIS2)"}
+  fields:
+    - {name: agent_name, source: fact, key: name}
+    - {name: platform, source: fact, key: platform}
+    - {name: owner, source: fact, key: owner}
+    - {name: channels, source: fact, key: channels}
+    - {name: connectors, source: fact, key: connectors}
+    - {name: auth_mode, source: fact, key: authMode}
+    - {name: service_supported, source: human, label: {en: "Business service the agent supports"}}
+    - {name: criticality, source: human, label: {en: "Criticality of the asset"}}
+  layout:
+    - title: {en: "Asset", es: "Activo"}
+      rows:
+        - {label: {en: "Agent", es: "Agente"}, field: agent_name}
+        - {label: {en: "Platform", es: "Plataforma"}, field: platform}
+        - {label: {en: "Owner", es: "Responsable"}, field: owner}
+        - {label: {en: "Channels", es: "Canales"}, field: channels}
+        - {label: {en: "Connected systems", es: "Sistemas conectados"}, field: connectors}
+        - {label: {en: "Authentication", es: "Autenticación"}, field: auth_mode}
+        - {label: {en: "Service supported", es: "Servicio soportado"}, field: service_supported}
+        - {label: {en: "Criticality", es: "Criticidad"}, field: criticality}
+  basis:
+    en: "Directive (EU) 2022/2555 (NIS2), Article 21(2), as transposed nationally."
+    es: "Directiva (UE) 2022/2555 (NIS2), artículo 21.2, según su transposición nacional."
+
+- id: nis2-incident-report
+  rule: NIS2-23-INCIDENT
+  template_reviewed_by: ""
+  titles: {en: "NIS2 significant incident notifications (Art. 23)", es: "Notificaciones de incidente significativo (NIS2, art. 23)"}
+  fields:
+    - {name: agent_name, source: fact, key: name}
+    - {name: incident_id, source: incident, key: id}
+    - {name: incident_title, source: incident, key: title}
+    - {name: detected_time, source: incident, key: detectedTime}
+    - {name: incident_description, source: incident, key: description}
+    - {name: early_warning, source: deadline, key: detectedTime, hours: 24}
+    - {name: notification, source: deadline, key: detectedTime, hours: 72}
+    - {name: final_report, source: deadline, key: detectedTime, hours: 720}
+    - {name: initial_assessment, source: human, label: {en: "Initial assessment: severity, impact, indicators of compromise"}}
+    - {name: cross_border_impact, source: human, label: {en: "Suspected unlawful or malicious cause; cross-border impact"}}
+    - {name: root_cause, source: human, label: {en: "Root cause and mitigation"}}
+  layout:
+    - title: {en: "Incident", es: "Incidente"}
+      rows:
+        - {label: {en: "Incident", es: "Incidente"}, field: incident_id}
+        - {label: {en: "Title", es: "Título"}, field: incident_title}
+        - {label: {en: "Agent", es: "Agente"}, field: agent_name}
+        - {label: {en: "Detected (awareness time to be confirmed)", es: "Detectado (momento de conocimiento por confirmar)"}, field: detected_time}
+        - {label: {en: "Facts known", es: "Hechos conocidos"}, field: incident_description}
+    - title: {en: "Reporting clock", es: "Calendario de notificación"}
+      rows:
+        - {label: {en: "Early warning (24 hours)", es: "Alerta temprana (24 horas)"}, field: early_warning}
+        - {label: {en: "Incident notification (72 hours)", es: "Notificación del incidente (72 horas)"}, field: notification}
+        - {label: {en: "Final report (about 1 month, 30 days used here)", es: "Informe final (aprox. 1 mes, aquí 30 días)"}, field: final_report}
+    - title: {en: "Assessment", es: "Evaluación"}
+      rows:
+        - {label: {en: "Initial assessment", es: "Evaluación inicial"}, field: initial_assessment}
+        - {label: {en: "Cause and cross-border impact", es: "Causa e impacto transfronterizo"}, field: cross_border_impact}
+        - {label: {en: "Root cause and mitigation", es: "Causa raíz y mitigación"}, field: root_cause}
+  basis:
+    en: "Directive (EU) 2022/2555 (NIS2), Article 23, as transposed nationally. Confirm the national authority and its reporting channel."
+    es: "Directiva (UE) 2022/2555 (NIS2), artículo 23, según su transposición nacional. Confirmar la autoridad nacional y su canal de notificación."
+
+- id: iso42001-impact-assessment
+  rule: ISO42001-IMPACT
+  template_reviewed_by: ""
+  titles: {en: "AI system impact assessment (ISO/IEC 42001)", es: "Evaluación de impacto del sistema de IA (ISO/IEC 42001)"}
+  fields:
+    - {name: agent_name, source: fact, key: name}
+    - {name: risk_tier, source: human, label: {en: "Confirmed risk tier (minimal, limited, high or prohibited-concern)"}}
+    - {name: evaluations, source: fact, key: evaluations}
+    - {name: overseers, source: fact, key: overseers}
+    - {name: stakeholders, source: human, label: {en: "Stakeholders and affected parties"}}
+    - {name: potential_impacts, source: human, label: {en: "Potential impacts on individuals, groups and society"}}
+    - {name: impact_controls, source: human, label: {en: "Controls and treatment of the impacts"}}
+  layout:
+    - title: {en: "System", es: "Sistema"}
+      rows:
+        - {label: {en: "Agent", es: "Agente"}, field: agent_name}
+        - {label: {en: "Risk tier", es: "Nivel de riesgo"}, field: risk_tier}
+        - {label: {en: "Evaluation evidence", es: "Evidencia de evaluación"}, field: evaluations}
+        - {label: {en: "Human oversight (observed)", es: "Supervisión humana (observada)"}, field: overseers}
+    - title: {en: "Impact assessment", es: "Evaluación de impacto"}
+      rows:
+        - {label: {en: "Stakeholders", es: "Partes interesadas"}, field: stakeholders}
+        - {label: {en: "Potential impacts", es: "Posibles impactos"}, field: potential_impacts}
+        - {label: {en: "Controls", es: "Controles"}, field: impact_controls}
+  basis:
+    en: "ISO/IEC 42001 (voluntary certification). Check the clause references against the licensed standard text."
+    es: "ISO/IEC 42001 (certificación voluntaria). Comprobar las referencias a cláusulas con el texto licenciado de la norma."
+
+- id: iso42001-soa-evidence
+  rule: ISO42001-SOA
+  template_reviewed_by: ""
+  titles: {en: "ISO/IEC 42001 Statement of Applicability evidence per agent", es: "Evidencias para la Declaración de Aplicabilidad por agente (ISO/IEC 42001)"}
+  fields:
+    - {name: agent_name, source: fact, key: name}
+    - {name: overseers, source: fact, key: overseers}
+    - {name: literacy_gaps, source: fact, key: literacyGaps}
+    - {name: retention_days, source: fact, key: retentionDays}
+    - {name: evaluations, source: fact, key: evaluations}
+    - {name: model_deployments, source: fact, key: modelDeployments}
+    - {name: control_mapping_notes, source: human, label: {en: "Mapping of this evidence to Annex A controls"}}
+  layout:
+    - title: {en: "Evidence observed", es: "Evidencias observadas"}
+      rows:
+        - {label: {en: "Agent", es: "Agente"}, field: agent_name}
+        - {label: {en: "Human oversight", es: "Supervisión humana"}, field: overseers}
+        - {label: {en: "People with no recorded training", es: "Personas sin formación registrada"}, field: literacy_gaps}
+        - {label: {en: "Log retention (days)", es: "Conservación de registros (días)"}, field: retention_days}
+        - {label: {en: "Evaluations", es: "Evaluaciones"}, field: evaluations}
+        - {label: {en: "Model deployments", es: "Despliegues de modelos"}, field: model_deployments}
+    - title: {en: "Mapping", es: "Correspondencia"}
+      rows:
+        - {label: {en: "Annex A control mapping", es: "Correspondencia con controles del anexo A"}, field: control_mapping_notes}
+  basis:
+    en: "ISO/IEC 42001, Annex A. The mapping is a human decision of the management system owner."
+    es: "ISO/IEC 42001, anexo A. La correspondencia es una decisión del responsable del sistema de gestión."
+
+- id: aesia-incident-notice
+  rule: ES-AESIA-INCIDENT
+  template_reviewed_by: ""
+  titles: {en: "Incident notice for AESIA (Art. 73, Spain)", es: "Notificación de incidente para la AESIA (art. 73, España)"}
+  fields:
+    - {name: agent_name, source: fact, key: name}
+    - {name: incident_id, source: incident, key: id}
+    - {name: incident_title, source: incident, key: title}
+    - {name: detected_time, source: incident, key: detectedTime}
+    - {name: incident_description, source: incident, key: description}
+    - {name: general_deadline, source: deadline, key: detectedTime, hours: 360}
+    - {name: controller_name, source: human, label: {en: "Organisation name"}}
+    - {name: provider_contact, source: human, label: {en: "Provider of the AI system (name and contact)"}}
+    - {name: submission_reference, source: human, label: {en: "AESIA submission reference, once filed"}}
+  layout:
+    - title: {en: "Notice", es: "Notificación"}
+      rows:
+        - {label: {en: "Organisation", es: "Organización"}, field: controller_name}
+        - {label: {en: "Provider", es: "Proveedor"}, field: provider_contact}
+        - {label: {en: "Incident", es: "Incidente"}, field: incident_id}
+        - {label: {en: "Title", es: "Título"}, field: incident_title}
+        - {label: {en: "System", es: "Sistema"}, field: agent_name}
+        - {label: {en: "Detected", es: "Detectado"}, field: detected_time}
+        - {label: {en: "General time limit (15 days after awareness, counsel to confirm)", es: "Plazo general (15 días desde el conocimiento, a confirmar por el asesor jurídico)"}, field: general_deadline}
+        - {label: {en: "Facts known", es: "Hechos conocidos"}, field: incident_description}
+        - {label: {en: "Submission reference", es: "Referencia de presentación"}, field: submission_reference}
+  basis:
+    en: "Regulation (EU) 2024/1689, Article 73, for notification to the Spanish supervisory authority (AESIA). The national form and channel must be checked with AESIA before use: this layout is not an official form."
+    es: "Reglamento (UE) 2024/1689, artículo 73, para la notificación a la autoridad de supervisión española (AESIA). El formulario y el canal nacionales deben comprobarse con la AESIA antes de su uso: esta estructura no es un formulario oficial."
+
+- id: ens-evidence-pack
+  rule: ES-ENS-EVIDENCE
+  template_reviewed_by: ""
+  titles: {en: "ENS evidence pack (Real Decreto 311/2022)", es: "Dossier de evidencias del ENS (Real Decreto 311/2022)"}
+  fields:
+    - {name: agent_name, source: fact, key: name}
+    - {name: owner, source: fact, key: owner}
+    - {name: channels, source: fact, key: channels}
+    - {name: auth_mode, source: fact, key: authMode}
+    - {name: sensitivity_labels, source: fact, key: sensitivityLabels}
+    - {name: retention_days, source: fact, key: retentionDays}
+    - {name: overseers, source: fact, key: overseers}
+    - {name: ens_category, source: human, label: {en: "ENS category of the information system (basic, medium or high)"}}
+    - {name: measures_reference, source: human, label: {en: "References to the ENS measures and their documentation"}}
+  layout:
+    - title: {en: "Observed evidence", es: "Evidencias observadas"}
+      rows:
+        - {label: {en: "Agent", es: "Agente"}, field: agent_name}
+        - {label: {en: "Owner", es: "Responsable"}, field: owner}
+        - {label: {en: "Channels", es: "Canales"}, field: channels}
+        - {label: {en: "Authentication", es: "Autenticación"}, field: auth_mode}
+        - {label: {en: "Sensitivity labels", es: "Etiquetas de sensibilidad"}, field: sensitivity_labels}
+        - {label: {en: "Log retention (days)", es: "Conservación de registros (días)"}, field: retention_days}
+        - {label: {en: "Named overseers", es: "Supervisores designados"}, field: overseers}
+    - title: {en: "ENS mapping", es: "Correspondencia con el ENS"}
+      rows:
+        - {label: {en: "System category", es: "Categoría del sistema"}, field: ens_category}
+        - {label: {en: "Measures and documentation", es: "Medidas y documentación"}, field: measures_reference}
+  basis:
+    en: "Real Decreto 311/2022 (Esquema Nacional de Seguridad). ENS certification is a separate process; this pack supplies evidence only."
+    es: "Real Decreto 311/2022 (Esquema Nacional de Seguridad). La certificación ENS es un proceso independiente; este dossier solo aporta evidencias."

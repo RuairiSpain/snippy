@@ -1,0 +1,58 @@
+# Document types. template_reviewed_by stays empty until counsel signs off the ES and EN templates.
+# Field sources: fact (from agent facts), rule_result, llm (narrative, may be derived without a model), human.
+- id: ai-interaction-disclosure
+  rule: AIA-50-1-disclosure
+  template_reviewed_by: ""
+  titles:
+    en: "AI interaction disclosure check (Art. 50(1))"
+    es: "Verificación de información de interacción con IA (art. 50.1)"
+  fields:
+    - {name: agent_name, source: fact, key: name}
+    - {name: owner, source: fact, key: owner}
+    - {name: channels, source: fact, key: channels}
+    - {name: auth_mode, source: fact, key: authMode}
+    - {name: greeting_text, source: fact, key: greetingText}
+    - {name: disclosure_match, source: fact, key: disclosureMatch}
+    - {name: check_result, source: rule_result}
+    - {name: agent_description, source: llm}
+    - {name: business_purpose, source: human, label: {en: "Business purpose"}}
+
+- id: register-entry
+  rule: AIA-REGISTER-ENTRY
+  template_reviewed_by: ""
+  titles:
+    en: "AI system register entry"
+    es: "Entrada del registro de sistemas de IA"
+  fields:
+    - {name: agent_name, source: fact, key: name}
+    - {name: platform, source: fact, key: platform}
+    - {name: owner, source: fact, key: owner}
+    - {name: sponsor, source: fact, key: sponsor}
+    - {name: channels, source: fact, key: channels}
+    - {name: knowledge_sources, source: fact, key: knowledgeSources}
+    - {name: connectors, source: fact, key: connectors}
+    - {name: last_activity, source: fact, key: lastActivity}
+    - {name: created_at, source: fact, key: createdAt}
+    - {name: agent_description, source: llm}
+    - {name: business_purpose, source: human, label: {en: "Business purpose"}}
+    - {name: intended_users, source: human, label: {en: "Intended users"}}
+
+- id: ropa-entry
+  rule: GDPR-30-ROPA
+  template_reviewed_by: ""
+  titles:
+    en: "Record of processing activities entry (GDPR Art. 30)"
+    es: "Entrada del registro de actividades de tratamiento (RGPD art. 30)"
+  fields:
+    - {name: agent_name, source: fact, key: name}
+    - {name: controller_name, source: human, label: {en: "Controller name"}}
+    - {name: controller_contact, source: human, label: {en: "Controller contact (DPO)"}}
+    - {name: processing_purposes, source: human, label: {en: "Purposes of the processing"}}
+    - {name: data_subjects, source: human, label: {en: "Categories of data subjects"}}
+    - {name: data_categories, source: fact, key: dataCategories}
+    - {name: knowledge_sources, source: fact, key: knowledgeSources}
+    - {name: recipients, source: human, label: {en: "Recipients"}}
+    - {name: third_country_transfers, source: human, label: {en: "Transfers to third countries"}}
+    - {name: retention_period, source: human, label: {en: "Retention period"}}
+    - {name: security_measures, source: fact, key: securityObserved}
+    - {name: agent_description, source: llm}
