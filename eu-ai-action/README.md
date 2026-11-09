@@ -4,6 +4,10 @@ Reads the evidence Microsoft already holds about each Copilot Studio agent, deci
 documents those duties need (EU AI Act Art. 50(1) disclosure check, register entry, GDPR Art. 30 record of processing)
 in Spanish and English, with a human review and approval step. Drafts only; not legal advice.
 
+Coverage: 30 document types (MVP, v1 and v2 of the plan) across the EU AI Act, GDPR, DORA, NIS2, ISO/IEC 42001 and Spain
+(AESIA, ENS), driven by 30 YAML rules. Per-incident documents (breach, serious incident, DORA, NIS2, AESIA, risk notice) and
+per-request documents (Art. 86 explanations) are generated for each incident or request id. See `docs/not-built.md` for what is missing.
+
 Plans: `MVP_PLAN.md` (scope and commercial assessment), `IMPLEMENTATION_PLAN.md` (build plan and status).
 
 ## Run locally (no Azure, no Microsoft tenant)
@@ -11,12 +15,13 @@ Plans: `MVP_PLAN.md` (scope and commercial assessment), `IMPLEMENTATION_PLAN.md`
 ```bash
 cd eu-ai-action
 pip install -r requirements-dev.txt
-pytest -q                       # 59 tests
+pytest -q                       # 94 tests
 python scripts/dev_server.py    # portal on http://127.0.0.1:8080/?tenant=00000000-0000-0000-0000-000000000001
 ```
 
 The dev server replays 8 hand-written agents from `tests/fixtures/agents/` (regenerate with `python scripts/make_fixtures.py`).
-Click "Scan tenant", open an agent, fill the inputs, then submit and approve a document.
+Click "Scan tenant", complete Settings (organisation profile), open an agent, fill the inputs, then submit and approve a document.
+The Audit tab verifies approved files against their recorded hashes and downloads an evidence bundle.
 Browser test: `node tests/e2e/portal_smoke.js http://127.0.0.1:8080` against a freshly started dev server.
 
 ## Configuration
@@ -35,6 +40,8 @@ The local dev server turns it off.
 | `eu_ai_action/rules/` | YAML rules and the engine (no `eval`, no model calls) |
 | `eu_ai_action/documents/` | Types, templates (`templates/{en,es}`), narrative, DOCX/PDF render |
 | `eu_ai_action/review/` | draft, in_review, approved, rejected, superseded |
+| `eu_ai_action/export/` | Evidence bundle (zip), Compliance Manager Excel fill-in, hash verification |
+| `eu_ai_action/notifications/` | Teams Adaptive Card for open tasks |
 | `eu_ai_action/services/pipeline.py` | Scan, rules, documents, tasks, readiness |
 | `eu_ai_action/api/` | Framework-free handlers and the tenant authorisation check |
 | `function_app.py` | Azure Functions: HTTP routes, durable scan, MCP tools |

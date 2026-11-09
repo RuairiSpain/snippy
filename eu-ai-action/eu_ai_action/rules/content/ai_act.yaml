@@ -6,9 +6,11 @@
   applies_from: 2026-08-02
   role: provider
   version: 1
+  # A public-facing status that cannot be determined counts as "applies": the duty is not silently skipped.
   applies_when:
-    all:
+    any:
       - {fact: isPublicFacing, op: eq, value: true}
+      - {fact: isPublicFacing, op: missing}
   check:
     unknown_when:
       - {fact: greetingText, op: missing}

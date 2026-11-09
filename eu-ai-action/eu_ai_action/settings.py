@@ -30,6 +30,13 @@ class Settings(BaseSettings):
     graph_api_version: str = "beta"
     graph_registry_path: str = ""
     purview_audit_path: str = ""
+    # Paths for the v1/v2 evidence sources. Empty = source disabled. Confirm each in a spike before enabling.
+    entra_access_path: str = ""
+    retention_path: str = ""
+    foundry_path: str = ""
+    defender_incidents_path: str = ""
+    learning_path: str = ""
+    teams_webhook_url: str = ""
     purview_audit_enabled: bool = True
     key_vault_name: str = ""
 
@@ -56,8 +63,9 @@ class Settings(BaseSettings):
     # rules and documents
     rules_dir: str = Field(default=str(PACKAGE_DIR / "rules" / "content"))
     templates_dir: str = Field(default=str(PACKAGE_DIR / "documents" / "templates"))
-    document_types_file: str = Field(default=str(PACKAGE_DIR / "documents" / "content" / "types.yaml"))
+    document_types_file: str = Field(default=str(PACKAGE_DIR / "documents" / "content"))  # directory or file
     require_counsel_review_for_release: bool = True
+    render_formats: str = "docx,pdf,md"
 
     # local development and tests
     use_fixtures: bool = False
@@ -66,6 +74,10 @@ class Settings(BaseSettings):
     @property
     def languages(self) -> list[str]:
         return [x.strip() for x in self.supported_languages.split(",") if x.strip()]
+
+    @property
+    def formats(self) -> list[str]:
+        return [x.strip() for x in self.render_formats.split(",") if x.strip()]
 
     @property
     def allowed_tenants(self) -> set[str]:

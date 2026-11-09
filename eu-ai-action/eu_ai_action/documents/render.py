@@ -91,7 +91,27 @@ def context(doc: Document, title: str, who_when: tuple[str, str] | None = None) 
     return {"f": f, "raw": raw, "title": title, "banner": banner, "lang": lang}
 
 
-def render_markdown(templates_dir: str, doc: Document, title: str) -> str:
+def layout_markdown(doc: Document, dt, title: str) -> str:
+    """Generates the document from the declarative layout in types.yaml (used by the v1/v2 documents)."""
+    c = context(doc, title)
+    lang, f = doc.language, c["f"]
+    out = [f"# {title}", "", c["banner"], ""]
+    for sec in dt.layout:
+        out += [f"## {sec.title[lang]}", ""]
+        if sec.text.get(lang):
+            out += [sec.text[lang], ""]
+        if sec.rows:
+            out += [f"| {r.label[lang]} | {f[r.field]} |" for r in sec.rows] + [""]
+        if sec.bullets.get(lang):
+            out += [f"- {b}" for b in sec.bullets[lang]] + [""]
+    if dt.basis.get(lang):
+        out += ["## " + ("Basis" if lang == "en" else "Base"), "", dt.basis[lang], ""]
+    return "\n".join(out)
+
+
+def render_markdown(templates_dir: str, doc: Document, title: str, dt=None) -> str:
+    if dt is not None and dt.layout:
+        return layout_markdown(doc, dt, title)
     env = Environment(loader=FileSystemLoader(str(Path(templates_dir) / doc.language)), autoescape=False, keep_trailing_newline=True)
     tpl = env.get_template(f"{doc.doc_type}.md.j2")
     who_when = (doc.approved_by, doc.approved_at) if doc.state == "approved" else None
@@ -179,6 +199,12 @@ def to_pdf(blocks: list[Block], doc: Document) -> bytes:
     return buf.getvalue()
 
 
-def render_files(templates_dir: str, doc: Document, title: str) -> dict[str, bytes]:
-    blocks = parse_blocks(render_markdown(templates_dir, doc, title))
-    return {"docx": to_docx(blocks, doc), "pdf": to_pdf(blocks, doc), "md": render_markdown(templates_dir, doc, title).encode("utf-8")}
+def render_files(templates_dir: str, doc: Document, title: str, dt=None, formats: tuple[str, ...] = ("docx", "pdf", "md")) -> dict[str, bytes]:
+    md = render_markdown(templates_dir, doc, title, dt)
+    blocks = parse_blocks(md)
+    out = {"md": md.encode("utf-8")}  # always kept: the file hash is computed from it
+    if "docx" in formats:
+        out["docx"] = to_docx(blocks, doc)
+    if "pdf" in formats:
+        out["pdf"] = to_pdf(blocks, doc)
+    return out

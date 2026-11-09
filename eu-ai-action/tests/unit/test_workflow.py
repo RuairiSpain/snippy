@@ -2,7 +2,7 @@ import pytest
 
 from eu_ai_action.models import Document
 from eu_ai_action.review import TransitionError, transition
-from tests.conftest import TENANT
+from tests.conftest import TENANT, scan_agent
 
 PUBLIC = "agent-public-nodisclosure"
 FULL = {
@@ -13,7 +13,7 @@ FULL = {
 
 
 def fill(pipeline):
-    pipeline.run_scan(TENANT)
+    scan_agent(pipeline, PUBLIC)
     a = pipeline.store.get("agents", TENANT, PUBLIC)
     a["inputs"] = FULL
     pipeline.store.upsert("agents", TENANT, a)
@@ -22,7 +22,7 @@ def fill(pipeline):
 
 
 def test_cannot_submit_with_missing_human_fields(pipeline):
-    pipeline.run_scan(TENANT)
+    scan_agent(pipeline, PUBLIC)
     d = pipeline.latest_document(TENANT, PUBLIC, "register-entry", "en")
     with pytest.raises(TransitionError, match="human input missing"):
         transition(d, "submit", "u", False)

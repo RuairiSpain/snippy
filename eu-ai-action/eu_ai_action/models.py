@@ -77,6 +77,7 @@ class DutyResult(CamelModel):
     rule_id: str
     rule_version: int
     rule_set_version: str
+    subject: str = ""
     regulation: str
     article: str
     applicability: Applicability
@@ -104,6 +105,7 @@ class Document(CamelModel):
     doc_type: str
     language: str
     version: int
+    subject: str = ""  # incident id or request id for per-subject documents
     state: DocState = "draft"
     stale: bool = False
     fields: dict[str, FieldValue] = Field(default_factory=dict)

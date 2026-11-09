@@ -52,5 +52,82 @@
         "label": "Confidential"
       }
     ]
+  },
+  "entra": {
+    "users": [
+      {
+        "displayName": "Ana Ruiz",
+        "role": "owner"
+      },
+      {
+        "displayName": "Luis Mora",
+        "role": "overseer"
+      },
+      {
+        "displayName": "Pia Sanz",
+        "role": "user"
+      }
+    ],
+    "accessGroups": [
+      {
+        "name": "Agent users",
+        "memberCount": 3
+      }
+    ]
+  },
+  "learning": {
+    "completions": [
+      {
+        "user": "Ana Ruiz",
+        "course": "AI literacy",
+        "date": "2026-05-01"
+      },
+      {
+        "user": "Luis Mora",
+        "course": "AI literacy",
+        "date": "2026-05-01"
+      }
+    ]
+  },
+  "retention": {
+    "purviewAuditDays": 180,
+    "logAnalyticsDays": 365,
+    "appInsightsDays": 90
+  },
+  "foundry": {
+    "deployments": [
+      {
+        "name": "gpt-4o",
+        "provider": "Azure OpenAI",
+        "region": "swedencentral",
+        "fineTuned": false
+      }
+    ],
+    "evaluations": [
+      {
+        "name": "groundedness",
+        "date": "2026-10-01",
+        "score": 0.91
+      }
+    ],
+    "generatesContent": [
+      "text"
+    ],
+    "contentCredentials": false
+  },
+  "defender": {
+    "incidents": [
+      {
+        "id": "INC-100",
+        "title": "Unusual data access by agent",
+        "severity": "high",
+        "status": "active",
+        "detectedTime": "2026-11-01T08:00:00Z",
+        "classifiedTime": "2026-11-01T10:00:00Z",
+        "personalDataAffected": true,
+        "seriousIncidentCandidate": false,
+        "description": "The agent read documents outside its configured sources."
+      }
+    ]
   }
 }

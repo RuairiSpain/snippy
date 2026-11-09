@@ -1,0 +1,10 @@
+# Annex III area -> keywords (matched case-insensitively in agent name, instructions, knowledge sources, data categories).
+# A heuristic to prompt the human classification, never a conclusion. Keep keywords specific to avoid false suggestions.
+"4 Employment and workers management": [recruit, hiring, candidate, cv screening, resume, performance review, promotion, dismissal, selección de personal, candidato, evaluación del desempeño]
+"5 Access to essential services and credit": [credit scor, creditworth, loan, mortgage, insurance pricing, life insurance, health insurance, benefit eligibility, solvencia, préstamo, hipoteca, prestaciones]
+"3 Education and vocational training": [admission, exam, student assessment, proctoring, matrícula, examen, evaluación del alumnado]
+"6 Law enforcement": [law enforcement, police, criminal, policía, delito]
+"7 Migration, asylum and border control": [asylum, visa, border, migration, asilo, frontera, migración]
+"8 Administration of justice and democratic processes": [court, judicial, election, tribunal, judicial, elecciones]
+"1 Biometrics": [biometric, facial recognition, emotion recognition, biométric, reconocimiento facial]
+"2 Critical infrastructure": [critical infrastructure, power grid, water supply, infraestructura crítica]

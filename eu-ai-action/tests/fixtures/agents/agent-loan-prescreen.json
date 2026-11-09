@@ -1,0 +1,98 @@
+{
+  "agent_id": "agent-loan-prescreen",
+  "name": "Loan Pre-screening",
+  "dataverse": {
+    "bot": {
+      "botid": "agent-loan-prescreen",
+      "name": "Loan Pre-screening",
+      "schemaname": "cr_agent-loan-prescreen",
+      "authenticationmode": 2,
+      "language": 1033,
+      "createdon": "2026-09-01T09:00:00Z",
+      "modifiedon": "2026-10-20T15:30:00Z",
+      "statecode": 0
+    },
+    "components": [
+      {
+        "name": "Conversation Start",
+        "schemaname": "cr_agent.topic.ConversationStart",
+        "componenttype": 9,
+        "content": "kind: AdaptiveDialog\nbeginDialog:\n  kind: OnConversationStart\n  actions:\n    - kind: SendActivity\n      activity: \"Welcome to loan pre-screening.\"\n"
+      },
+      {
+        "name": "Instructions",
+        "schemaname": "cr_agent.gpt.default",
+        "componenttype": 15,
+        "content": "kind: GptComponentMetadata\ninstructions: \"Pre-screen loan applications and support credit scoring decisions.\"\n"
+      },
+      {
+        "name": "Credit-Policies",
+        "schemaname": "cr_agent.knowledge.Credit-Policies",
+        "componenttype": 16,
+        "content": "kind: KnowledgeSourceConfiguration\nsource:\n  kind: SharePointSearchSource\n  site: https://contoso.sharepoint.com/sites/credit\n"
+      }
+    ],
+    "channels": [
+      "MsTeams"
+    ]
+  },
+  "registry": {
+    "owner": {
+      "displayName": "Ana Ruiz"
+    },
+    "sponsor": {
+      "displayName": "Luis Mora"
+    },
+    "lastActivity": "2026-11-05T10:00:00Z"
+  },
+  "entra": {
+    "users": [
+      {
+        "displayName": "Luis Mora",
+        "role": "owner"
+      }
+    ],
+    "accessGroups": [
+      {
+        "name": "Agent users",
+        "memberCount": 1
+      }
+    ]
+  },
+  "foundry": {
+    "deployments": [
+      {
+        "name": "gpt-4o",
+        "provider": "Azure OpenAI",
+        "region": "swedencentral",
+        "fineTuned": false
+      }
+    ],
+    "evaluations": [
+      {
+        "name": "groundedness",
+        "date": "2026-10-01",
+        "score": 0.91
+      }
+    ],
+    "generatesContent": [
+      "text"
+    ],
+    "contentCredentials": true
+  },
+  "defender": {
+    "incidents": [
+      {
+        "id": "INC-200",
+        "title": "Wrong scoring outcome affecting applicants",
+        "severity": "critical",
+        "status": "active",
+        "detectedTime": "2026-11-03T09:30:00Z",
+        "classifiedTime": "2026-11-03T11:00:00Z",
+        "personalDataAffected": false,
+        "seriousIncidentCandidate": true,
+        "description": "A configuration change produced incorrect pre-screening outcomes."
+      }
+    ]
+  }
+}

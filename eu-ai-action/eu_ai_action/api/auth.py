@@ -18,8 +18,9 @@ class AuthError(Exception):
         self.status, self.message = status, message
 
 
-def authorize(headers: Mapping[str, str], tenant_id: str, s: Settings) -> str:
-    """Returns the user name or raises AuthError. The caller's Entra tenant must equal the path tenant."""
+def authorize(headers: Mapping[str, str], tenant_id: str, s: Settings, write: bool = False) -> str:
+    """Returns the user name or raises AuthError. The caller's Entra tenant must equal the path tenant.
+    Users holding the app role "Auditor" are read-only: calls with write=True are refused."""
     if s.auth_disabled:
         return "dev-user"
     raw = {k.lower(): v for k, v in headers.items()}.get("x-ms-client-principal")
@@ -35,4 +36,8 @@ def authorize(headers: Mapping[str, str], tenant_id: str, s: Settings) -> str:
         raise AuthError(403, "not authorised for this tenant")
     if s.allowed_tenants and tid not in s.allowed_tenants:
         raise AuthError(403, "tenant not allowed")
+    roles = {str(c.get("val", "")).lower() for c in principal.get("claims", []) if c.get("typ") in ("roles", "role")}
+    roles |= {str(r).lower() for r in principal.get("userRoles", []) or []}
+    if write and "auditor" in roles:
+        raise AuthError(403, "auditors have read-only access")
     return principal.get("userDetails") or claims.get("preferred_username") or "unknown"

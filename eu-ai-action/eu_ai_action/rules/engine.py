@@ -42,10 +42,11 @@ def eval_cond(c: Cond, facts: AgentFacts) -> bool:
     raise ValueError(f"unknown op {c.op}")
 
 
-def evaluate_rule(rule: Rule, facts: AgentFacts, rule_set_version: str, today: date | None = None) -> DutyResult:
+def evaluate_rule(rule: Rule, facts: AgentFacts, rule_set_version: str, today: date | None = None, subject: str = "") -> DutyResult:
     today = today or date.today()
     base = dict(
-        id=f"{facts.agent_id}.{rule.id}",
+        id=f"{facts.agent_id}.{rule.id}" + (f".{subject}" if subject else ""),
+        subject=subject,
         tenant_id=facts.tenant_id,
         agent_id=facts.agent_id,
         rule_id=rule.id,
@@ -75,4 +76,5 @@ def evaluate_rule(rule: Rule, facts: AgentFacts, rule_set_version: str, today: d
 
 
 def evaluate_rules(rule_set: RuleSet, facts: AgentFacts, today: date | None = None) -> list[DutyResult]:
-    return [evaluate_rule(r, facts, rule_set.version, today) for r in rule_set.rules]
+    """Agent-level rules only. Per-incident and per-request rules are evaluated by the pipeline, one subject at a time."""
+    return [evaluate_rule(r, facts, rule_set.version, today) for r in rule_set.rules if r.per == "agent"]

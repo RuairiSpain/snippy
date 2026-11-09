@@ -27,7 +27,7 @@ class FixtureSource:
     def collect(self, tenant_id: str, agent: AgentRef, scan_id: str) -> list[Evidence]:
         data = self._load()[agent.agent_id]
         out = []
-        for source in ("dataverse", "registry", "purview"):
+        for source in ("dataverse", "registry", "purview", "entra", "retention", "foundry", "defender", "learning"):
             if source in data:
                 out.append(make_evidence(tenant_id, agent.agent_id, scan_id, source, f"fixture:{source}", data[source]))
         return out

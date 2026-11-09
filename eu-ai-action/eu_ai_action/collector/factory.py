@@ -25,4 +25,12 @@ def make_source(s: Settings) -> list[EvidenceSource]:
     ]
     if s.purview_audit_enabled:
         sources.append(PurviewSource(s.graph_base_url, s.graph_api_version, s.purview_audit_path, graph_token))
+    from .generic import GenericJsonSource
+
+    for name, path in (
+        ("entra", s.entra_access_path), ("retention", s.retention_path), ("foundry", s.foundry_path),
+        ("defender", s.defender_incidents_path), ("learning", s.learning_path),
+    ):
+        if path:
+            sources.append(GenericJsonSource(name, s.graph_base_url, s.graph_api_version, path, graph_token))
     return sources

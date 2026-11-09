@@ -15,7 +15,7 @@
     - {name: disclosure_match, source: fact, key: disclosureMatch}
     - {name: check_result, source: rule_result}
     - {name: agent_description, source: llm}
-    - {name: business_purpose, source: human}
+    - {name: business_purpose, source: human, label: {en: "Business purpose"}}
 
 - id: register-entry
   rule: AIA-REGISTER-ENTRY
@@ -34,8 +34,8 @@
     - {name: last_activity, source: fact, key: lastActivity}
     - {name: created_at, source: fact, key: createdAt}
     - {name: agent_description, source: llm}
-    - {name: business_purpose, source: human}
-    - {name: intended_users, source: human}
+    - {name: business_purpose, source: human, label: {en: "Business purpose"}}
+    - {name: intended_users, source: human, label: {en: "Intended users"}}
 
 - id: ropa-entry
   rule: GDPR-30-ROPA
@@ -45,14 +45,14 @@
     es: "Entrada del registro de actividades de tratamiento (RGPD art. 30)"
   fields:
     - {name: agent_name, source: fact, key: name}
-    - {name: controller_name, source: human}
-    - {name: controller_contact, source: human}
-    - {name: processing_purposes, source: human}
-    - {name: data_subjects, source: human}
+    - {name: controller_name, source: human, label: {en: "Controller name"}}
+    - {name: controller_contact, source: human, label: {en: "Controller contact (DPO)"}}
+    - {name: processing_purposes, source: human, label: {en: "Purposes of the processing"}}
+    - {name: data_subjects, source: human, label: {en: "Categories of data subjects"}}
     - {name: data_categories, source: fact, key: dataCategories}
     - {name: knowledge_sources, source: fact, key: knowledgeSources}
-    - {name: recipients, source: human}
-    - {name: third_country_transfers, source: human}
-    - {name: retention_period, source: human}
+    - {name: recipients, source: human, label: {en: "Recipients"}}
+    - {name: third_country_transfers, source: human, label: {en: "Transfers to third countries"}}
+    - {name: retention_period, source: human, label: {en: "Retention period"}}
     - {name: security_measures, source: fact, key: securityObserved}
     - {name: agent_description, source: llm}

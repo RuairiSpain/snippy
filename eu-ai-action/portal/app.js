@@ -6,10 +6,17 @@ const view = document.getElementById("view");
 const statusEl = document.getElementById("status");
 let tenant = new URLSearchParams(location.search).get("tenant") || "";
 
-const INPUT_LABELS = {
-  business_purpose: "Business purpose", intended_users: "Intended users", processing_purposes: "Purposes of the processing",
-  data_subjects: "Categories of data subjects", recipients: "Recipients", third_country_transfers: "Transfers to third countries",
-  retention_period: "Retention period",
+const YES_NO = {
+  used_in_workplace: "Used at the workplace on employees?", decisions_about_persons: "Used in decisions about individuals?",
+  dpia_required: "Does a DPIA apply?", substantial_modification: "Substantially modified, rebranded or given a new purpose?",
+  publishes_public_interest_content: "Publishes AI-generated text on matters of public interest?", iso42001: "In scope of ISO/IEC 42001?",
+};
+const RISK_TIERS = ["", "minimal", "limited", "high", "prohibited-concern"];
+const PROFILE = {
+  country: ["Country (two-letter code)", "text"], is_public_body: ["Public body?", "yesno"], provides_public_services: ["Provides public services?", "yesno"],
+  credit_or_insurance_pricing: ["Credit scoring or life/health insurance pricing?", "yesno"], is_financial_entity: ["Financial entity (DORA)?", "yesno"],
+  is_nis2_entity: ["Essential or important entity (NIS2)?", "yesno"], is_employer: ["Employer of the people using agents?", "yesno"],
+  iso42001_in_scope: ["Pursuing ISO/IEC 42001?", "yesno"],
 };
 
 function h(tag, attrs, ...kids) {
@@ -55,9 +62,12 @@ async function refreshTaskCount() {
 }
 
 async function agentsView() {
-  const agents = await api("GET", "/agents");
-  if (!agents.length) return view.replaceChildren(h("p", {}, "No agents yet. Choose \"Scan tenant\"."));
+  const [agents, prof] = await Promise.all([api("GET", "/agents"), api("GET", "/profile")]);
+  const banner = prof.complete ? null : h("div", { class: "card" }, "Organisation profile incomplete: ",
+    h("a", { href: "#/settings" }, "complete it"), " so sector rules (DORA, NIS2, FRIA scope, Spain) can apply. Missing: ", prof.missing.join(", "), ".");
+  if (!agents.length) return view.replaceChildren(banner, h("p", {}, "No agents yet. Choose \"Scan tenant\"."));
   view.replaceChildren(
+    banner,
     h("h2", {}, "Agents"),
     h("table", {},
       h("thead", {}, h("tr", {}, ["Agent", "Owner", "Public-facing", "Duties met", "Pass", "Fail", "Unknown"].map((x) => h("th", {}, x)))),
@@ -72,22 +82,45 @@ async function agentsView() {
 
 async function agentView(id) {
   const d = await api("GET", `/agents/${encodeURIComponent(id)}`);
-  const a = d.agent, f = a.facts;
+  const a = d.agent, f = a.facts, labels = d.inputLabels || {};
   const val = (k) => (f[k] && f[k].value != null && f[k].value !== "" ? (Array.isArray(f[k].value) ? f[k].value.map((x) => (typeof x === "object" ? x.name : x)).join(", ") : String(f[k].value)) : "");
-  const needed = new Set();
-  d.documents.forEach((doc) => Object.entries(doc.fields).forEach(([n, fv]) => { if (fv.source === "human" && fv.pending) needed.add(n); }));
-  const allInputs = Object.keys(INPUT_LABELS).filter((n) => needed.has(n) || a.inputs[n]);
 
+  // human inputs needed by the current documents, keyed by subject when the document is per incident or per request
+  const needed = new Map();
+  d.documents.forEach((doc) => Object.entries(doc.fields).forEach(([n, fv]) => {
+    if (fv.source !== "human") return;
+    const key = doc.subject ? `${doc.subject}:${n}` : n;
+    if (fv.pending || a.inputs[key]) needed.set(key, { label: (labels[n] || n.replace(/_/g, " ")) + (doc.subject ? ` (${doc.subject})` : ""), doc: doc.docType });
+  }));
+  const textKeys = [...needed.keys()].filter((k) => k !== "risk_tier");
+
+  const groupByDoc = (keys) => {
+    const groups = new Map();
+    keys.forEach((k) => { const t = needed.get(k).doc; groups.set(t, [...(groups.get(t) || []), k]); });
+    return [...groups.entries()].sort();
+  };
+  const select = (name, options, current) => h("select", { name, id: `in-${name}` }, options.map(([v, t]) => h("option", { value: v, selected: v === current }, t)));
+  const control = [
+    h("div", {}, h("label", { for: "in-risk_tier" }, "Confirmed risk tier"), select("risk_tier", RISK_TIERS.map((v) => [v, v || "not confirmed"]), (a.inputs.risk_tier || "").toLowerCase())),
+    ...Object.entries(YES_NO).map(([k, label]) => h("div", {}, h("label", { for: `in-${k}` }, label), select(k, [["", "not answered"], ["yes", "yes"], ["no", "no"]], (a.inputs[k] || "").toLowerCase()))),
+    h("div", {}, h("label", { for: "in-explanation_requests" }, "Article 86 explanation requests (comma-separated ids)"),
+      h("input", { type: "text", id: "in-explanation_requests", name: "explanation_requests", maxlength: 2000, value: a.inputs.explanation_requests || "" })),
+  ];
   const form = h("form", { onsubmit: async (e) => {
     e.preventDefault();
     const body = {};
-    allInputs.forEach((n) => { body[n] = form.elements[n].value; });
+    ["risk_tier", ...Object.keys(YES_NO), "explanation_requests"].forEach((n) => { body[n] = form.elements[n].value; });
+    textKeys.forEach((n) => { if (n !== "explanation_requests") body[n] = form.elements[n].value; });
     try { say("Saving..."); await api("PATCH", `/agents/${encodeURIComponent(id)}/inputs`, body); say("Saved."); await agentView(id); refreshTaskCount(); }
     catch (err) { say(err.message, true); }
   } },
-    allInputs.map((n) => h("div", {}, h("label", { for: `in-${n}` }, INPUT_LABELS[n]),
-      h("textarea", { id: `in-${n}`, name: n, rows: 2, maxlength: 2000 }, a.inputs[n] || ""))),
-    allInputs.length ? h("p", {}, h("button", { class: "primary", type: "submit" }, "Save inputs")) : h("p", { class: "muted" }, "No inputs needed."));
+    h("h4", {}, "Scope and classification"), control,
+    h("h4", {}, "Document inputs"),
+    textKeys.length ? groupByDoc(textKeys.filter((n) => n !== "explanation_requests")).map(([docType, keys]) => h("details", {},
+      h("summary", {}, `${docType} (${keys.filter((n) => !a.inputs[n]).length} missing)`),
+      keys.map((n) => h("div", {}, h("label", { for: `in-${n}` }, needed.get(n).label),
+        h("textarea", { id: `in-${n}`, name: n, rows: 2, maxlength: 2000 }, a.inputs[n] || ""))))) : h("p", { class: "muted" }, "No document inputs needed."),
+    h("p", {}, h("button", { class: "primary", type: "submit" }, "Save inputs")));
 
   const transition = (doc, action) => h("button", { type: "button", onclick: async () => {
     try { await api("POST", `/documents/${encodeURIComponent(doc.id)}/transition`, { action }); say(`${action} done.`); await agentView(id); }
@@ -102,18 +135,19 @@ async function agentView(id) {
       h("div", {}, h("strong", {}, "Owner: "), val("owner") || "missing", "   ", h("strong", {}, "Sponsor: "), val("sponsor") || "missing"),
       h("div", {}, h("strong", {}, "Channels: "), val("channels") || "unknown", "   ", h("strong", {}, "Authentication: "), val("authMode") || "unknown"),
       h("div", {}, h("strong", {}, "Opening message: "), val("greetingText") || h("span", { class: "unknown" }, "not found")),
+      h("div", {}, h("strong", {}, "Possible Annex III areas (keyword match): "), val("suggestedAnnexIII") || "none"),
       h("div", { class: "muted" }, `Public-facing is a heuristic (confidence ${(f.isPublicFacing && f.isPublicFacing.confidence) || "n/a"}). Confirm with the agent owner.`)),
     h("h3", {}, "Duties"),
-    h("table", {}, h("thead", {}, h("tr", {}, ["Regulation", "Article", "Applies", "Result", "Counsel review"].map((x) => h("th", {}, x)))),
-      h("tbody", {}, d.dutyResults.map((r) => h("tr", {}, h("td", {}, r.regulation), h("td", {}, r.article),
-        h("td", {}, r.applicability === "applies" ? "yes" : "no"), h("td", {}, pill(r.result)), h("td", {}, r.counselReviewed ? "signed off" : h("span", { class: "unknown" }, "pending")))))),
+    h("table", {}, h("thead", {}, h("tr", {}, ["Regulation", "Article", "Subject", "Applies", "Result", "Counsel review"].map((x) => h("th", {}, x)))),
+      h("tbody", {}, d.dutyResults.filter((r) => r.applicability === "applies").map((r) => h("tr", {}, h("td", {}, r.regulation), h("td", {}, r.article), h("td", {}, r.subject || ""),
+        h("td", {}, "yes"), h("td", {}, pill(r.result)), h("td", {}, r.counselReviewed ? "signed off" : h("span", { class: "unknown" }, "pending")))))),
     h("h3", {}, "Inputs"), form,
     h("h3", {}, "Documents"),
-    h("table", {}, h("thead", {}, h("tr", {}, ["Document", "Lang", "Version", "State", "Auto-filled", "Files", "Actions"].map((x) => h("th", {}, x)))),
+    h("table", {}, h("thead", {}, h("tr", {}, ["Document", "Subject", "Lang", "Version", "State", "Auto-filled", "Files", "Actions"].map((x) => h("th", {}, x)))),
       h("tbody", {}, d.documents.map((doc) => h("tr", {},
-        h("td", {}, doc.docType), h("td", {}, doc.language), h("td", {}, `v${doc.version}${doc.stale ? " (stale)" : ""}`),
+        h("td", {}, doc.docType), h("td", {}, doc.subject || ""), h("td", {}, doc.language), h("td", {}, `v${doc.version}${doc.stale ? " (stale)" : ""}`),
         h("td", {}, doc.state), h("td", {}, `${Math.round(doc.autofillRatio * 100)}%`),
-        h("td", {}, ["docx", "pdf"].map((fmt) => h("a", { href: `/api/tenants/${encodeURIComponent(tenant)}/documents/${encodeURIComponent(doc.id)}/file?format=${fmt}`, style: "margin-right:8px" }, fmt))),
+        h("td", {}, ["docx", "pdf"].filter((fmt) => doc.filePaths[fmt]).map((fmt) => h("a", { href: `/api/tenants/${encodeURIComponent(tenant)}/documents/${encodeURIComponent(doc.id)}/file?format=${fmt}`, style: "margin-right:8px" }, fmt))),
         h("td", { class: "row" }, (actions[doc.state] || []).map((x) => transition(doc, x))))))));
 }
 
@@ -125,15 +159,57 @@ async function tasksView() {
 }
 
 async function settingsView() {
-  const form = h("form", { onsubmit: async (e) => {
+  const prof = await api("GET", "/profile");
+  const defaults = h("form", { onsubmit: async (e) => {
     e.preventDefault();
-    try { await api("PATCH", "/defaults", { controller_name: form.elements.controller_name.value, controller_contact: form.elements.controller_contact.value }); say("Saved."); }
+    try { await api("PATCH", "/defaults", { controller_name: defaults.elements.controller_name.value, controller_contact: defaults.elements.controller_contact.value }); say("Saved."); }
     catch (err) { say(err.message, true); }
   } },
     h("label", { for: "cn" }, "Controller name"), h("input", { id: "cn", name: "controller_name", type: "text", maxlength: 2000 }),
     h("label", { for: "cc" }, "Controller contact (DPO)"), h("input", { id: "cc", name: "controller_contact", type: "text", maxlength: 2000 }),
     h("p", {}, h("button", { class: "primary", type: "submit" }, "Save")));
-  view.replaceChildren(h("h2", {}, "Organisation defaults"), h("p", { class: "muted" }, "Used in every record-of-processing entry."), form);
+  const profile = h("form", { onsubmit: async (e) => {
+    e.preventDefault();
+    const body = {};
+    Object.keys(PROFILE).forEach((k) => { body[k] = profile.elements[k].value; });
+    try { await api("PATCH", "/profile", body); say("Saved."); await settingsView(); } catch (err) { say(err.message, true); }
+  } },
+    Object.entries(PROFILE).map(([k, [label, kind]]) => h("div", {}, h("label", { for: `p-${k}` }, label),
+      kind === "yesno"
+        ? h("select", { id: `p-${k}`, name: k }, [["", "not answered"], ["yes", "yes"], ["no", "no"]].map(([v, t]) => h("option", { value: v, selected: v === (prof.profile[k] || "").toLowerCase() }, t)))
+        : h("input", { id: `p-${k}`, name: k, type: "text", maxlength: 2, value: prof.profile[k] || "" }))),
+    h("p", {}, h("button", { class: "primary", type: "submit" }, "Save profile")));
+  view.replaceChildren(h("h2", {}, "Organisation defaults"), h("p", { class: "muted" }, "Used in every record-of-processing entry."), defaults,
+    h("h2", {}, "Organisation profile"), h("p", { class: "muted" }, "Decides which regulations apply to your agents."), profile);
+}
+
+async function auditView() {
+  const pack = await api("GET", "/audit");
+  const fileInput = h("input", { type: "file", id: "cm-file", accept: ".xlsx" });
+  const download = async () => {
+    try {
+      const f = fileInput.files[0];
+      const r = await fetch(`/api/tenants/${encodeURIComponent(tenant)}/export`, { method: "POST", body: f || undefined });
+      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `HTTP ${r.status}`);
+      const url = URL.createObjectURL(await r.blob());
+      const link = h("a", { href: url, download: "eu-ai-action-evidence.zip" });
+      document.body.append(link); link.click(); link.remove(); URL.revokeObjectURL(url);
+      say("Bundle downloaded.");
+    } catch (err) { say(err.message, true); }
+  };
+  const verify = (doc) => h("button", { type: "button", onclick: async (ev) => {
+    try { const v = await api("GET", `/documents/${encodeURIComponent(doc.id)}/verify`); ev.target.replaceWith(h("span", { class: v.intact ? "pass" : "fail" }, v.intact ? "intact" : "CHANGED")); }
+    catch (err) { say(err.message, true); }
+  } }, "verify");
+  view.replaceChildren(h("h2", {}, "Audit"),
+    h("p", { class: "muted" }, `Rule set ${pack.ruleSetVersion}. Approved documents only; a changed file fails verification.`),
+    h("div", { class: "card" }, h("strong", {}, "Evidence bundle"), h("p", { class: "muted" }, "Optionally choose the Excel file exported from Compliance Manager; its status and notes columns are filled in. Column names are unverified: check the result before uploading."),
+      h("div", { class: "row" }, fileInput, h("button", { type: "button", class: "primary", onclick: download }, "Download bundle"))),
+    pack.documents.length ? h("table", {}, h("thead", {}, h("tr", {}, ["Document", "Lang", "Version", "Approved by", "Approved at", "Counsel", "Hash", ""].map((x) => h("th", {}, x)))),
+      h("tbody", {}, pack.documents.map((d) => h("tr", {}, h("td", {}, d.id), h("td", {}, d.language), h("td", {}, `v${d.version}`), h("td", {}, d.approvedBy), h("td", {}, d.approvedAt),
+        h("td", {}, d.counselReviewed ? "signed off" : "pending"), h("td", {}, d.fileHash), h("td", {}, verify(d)))))) : h("p", {}, "No approved documents yet."),
+    h("h3", {}, "Log"),
+    h("table", {}, h("tbody", {}, pack.auditLog.map((a) => h("tr", {}, h("td", {}, a.at), h("td", {}, a.user), h("td", {}, a.action), h("td", {}, a.documentId))))));
 }
 
 async function route() {
@@ -144,6 +220,7 @@ async function route() {
     if (hash.startsWith("#/agent/")) await agentView(decodeURIComponent(hash.slice(8)));
     else if (hash === "#/tasks") await tasksView();
     else if (hash === "#/settings") await settingsView();
+    else if (hash === "#/audit") await auditView();
     else await agentsView();
     refreshTaskCount();
   } catch (err) { say(err.message, true); }

@@ -31,6 +31,10 @@ ROUTES = [
     ("POST", r"/api/tenants/([^/]+)/scans", lambda t, q, b: API.start_scan({}, t)),
     ("GET", r"/api/tenants/([^/]+)/agents", lambda t, q, b: API.list_agents({}, t)),
     ("GET", r"/api/tenants/([^/]+)/tasks", lambda t, q, b: API.list_tasks({}, t)),
+    ("GET", r"/api/tenants/([^/]+)/profile", lambda t, q, b: API.get_profile({}, t)),
+    ("PATCH", r"/api/tenants/([^/]+)/profile", lambda t, q, b: API.patch_profile({}, t, b)),
+    ("GET", r"/api/tenants/([^/]+)/audit", lambda t, q, b: API.audit_pack({}, t)),
+    ("GET", r"/api/tenants/([^/]+)/documents/([^/]+)/verify", lambda t, d, q, b: API.verify({}, t, d)),
     ("PATCH", r"/api/tenants/([^/]+)/defaults", lambda t, q, b: API.patch_defaults({}, t, b)),
     ("GET", r"/api/tenants/([^/]+)/agents/([^/]+)", lambda t, a, q, b: API.get_agent({}, t, a)),
     ("PATCH", r"/api/tenants/([^/]+)/agents/([^/]+)/inputs", lambda t, a, q, b: API.patch_inputs({}, t, a, b)),
@@ -53,10 +57,16 @@ class H(BaseHTTPRequestHandler):
         u = urlparse(self.path)
         q = {k: v[0] for k, v in parse_qs(u.query).items()}
         body: dict = {}
+        raw = b""
         n = int(self.headers.get("Content-Length") or 0)
         if n:
-            body = json.loads(self.rfile.read(n))
+            raw = self.rfile.read(n)
+            if "json" in (self.headers.get("Content-Type") or ""):
+                body = json.loads(raw)
         try:
+            m = re.fullmatch(r"/api/tenants/([^/]+)/export", u.path)
+            if method == "POST" and m:
+                return self._send(200, API.export_bundle({}, m[1], raw or None), "application/zip", {"Content-Disposition": 'attachment; filename="eu-ai-action-evidence.zip"'})
             m = re.fullmatch(r"/api/tenants/([^/]+)/documents/([^/]+)/file", u.path)
             if method == "GET" and m:
                 data, ctype = API.get_file({}, m[1], m[2], q.get("format", "pdf"))

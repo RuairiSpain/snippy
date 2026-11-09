@@ -3,22 +3,29 @@
 Companion to `MVP_PLAN.md` (scope, go/no-go criteria, commercial assessment). This file is the build plan.
 Status: draft, 8 November 2026. Microsoft API details are assumptions until milestone M1 confirms them; they are marked **[verify]**.
 
-## Build status (8 November 2026)
+## Build status (9 November 2026)
 
-| Milestone | State |
+Everything below that is marked "tested" runs offline against fixtures (94 pytest tests, plus a browser test of the portal).
+Nothing was run against a Microsoft tenant or Azure.
+
+| Phase | State |
 |---|---|
-| M0 setup | Scaffold, CI, settings, 8 fixture agents done. **Not done:** the real dev tenant, seeded Copilot Studio agents, Azure deployment. |
-| M1 spikes | Scripts written (`spikes/run_spikes.py`). **Not run**: needs tenant credentials. `docs/spike-results.md` is a blank template. |
-| M2 collector and facts | Facts, provenance, disclosure detector done and tested. Dataverse, Graph and Purview clients written from assumed APIs and **untested against a live tenant**. |
-| M3 rule engine | Done and tested for the 3 rules. Counsel review not done (`reviewed_by` empty). |
-| M4 documents | 3 documents x ES/EN, DOCX/PDF/MD, versioning, stale detection, workflow, audit done and tested. Templates not reviewed by counsel. Azure OpenAI path tested with a fake client only. |
-| M5 API, MCP, portal | HTTP handlers, tenant authorisation, durable scan and MCP tools written; portal tested in a browser against the dev server. Hosted behaviour (Functions host, Easy Auth, MCP) **not run**. |
-| M6 pilots | **Not started**: needs a deployment, real tenants and customers. Bicep written but not validated. |
+| M0 setup | Scaffold, CI (passing on the PR), settings, 10 fixture agents done. **Not done:** real dev tenant, seeded Copilot Studio agents, Azure deployment. |
+| M1 spikes | Scripts written (`spikes/run_spikes.py`). **Deferred by decision** until the tenant spike is scheduled. `docs/spike-results.md` is a blank template. |
+| M2 collector and facts | Facts, provenance, disclosure detector, Annex III keyword suggestion tested. Dataverse, Graph and Purview clients, and five more sources (Entra access, retention, Foundry, Defender, learning) written from assumed shapes, **untested live**. |
+| M3 rule engine | 30 rules, tested. Missing evidence never silently skips a duty. Counsel review not done (`reviewed_by` empty). |
+| M4 documents | 30 document types in ES and EN, DOCX/PDF/MD, versioning, stale detection, workflow, audit, deadline calculation, per-incident and per-request documents: tested. Templates not reviewed by counsel. Azure OpenAI path tested with a fake client only. |
+| M5 API, MCP, portal | Handlers, tenant authorisation, auditor read-only role, durable scan, MCP tools, portal (agents, tasks, settings and profile, audit): written and tested offline. Hosted behaviour (Functions host, Easy Auth, MCP) **not run**. |
+| v1 | DPIA pack, oversight record, worker and affected-person notices, GDPR breach and AI Act incident drafts, risk classification, literacy record, log-retention attestation, provider status: done. Compliance Manager write-back: export bundle done (Excel fill-in with **unverified column names**). Teams tasks: card builder done, not tested against Teams. Marketplace listing: **not built**. |
+| v2 | FRIA, Art. 86 explanations, EU database record, Art. 50(2) and 50(4), DORA incident and register rows, NIS2 asset and incident, ISO 42001 impact and SoA evidence, AESIA notice, ENS pack, Foundry evidence: done as document types and rules. Copilot Studio runtime webhook evidence and the Annex IV exporter: **not built** (see `docs/not-built.md`). |
+| High-risk readiness | Auditor role, audit pack, hash verification, evidence bundle: done. ENS certification is a separate process. |
+| M6 pilots | **Not started.** Bicep written but not validated. |
 
 Deviations from the plan below: the Python package is `eu_ai_action/` at the project root (not `src/`); HTTP routes are all
-under `/api/tenants/{tenant_id}/...`; regeneration is `POST .../agents/{agent_id}/generate`; MCP tools do not expose approval
-and run for `TARGET_TENANT_ID` only; the Art. 50(1) rule reports `unknown` (not `pass`) when the greeting wording is only
-"virtual assistant", pending counsel's view.
+under `/api/tenants/{tenant_id}/...`; MCP tools do not expose approval and run for `TARGET_TENANT_ID` only; the Art. 50(1) rule
+reports `unknown` when the greeting says only "virtual assistant"; duties whose applicability depends on a fact that could not
+be read (public-facing status, synthetic content) apply with an `unknown` result instead of being skipped; risk tier,
+sector profile and several scope questions are human inputs, with a keyword-based Annex III suggestion only as a prompt.
 
 ## 1. Goal and definition of done
 

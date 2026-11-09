@@ -54,9 +54,10 @@ def test_allowed_tenant_list(settings, pipeline):
 
 def test_end_to_end_through_api(secured):
     h = principal(TENANT)
+    secured.p.s.render_formats = "docx,pdf,md"
     assert secured.start_scan(h, TENANT)["status"] == "completed"
     agents = secured.list_agents(h, TENANT)
-    assert len(agents) == 8
+    assert len(agents) == 10
     aid = "agent-public-nodisclosure"
     detail = secured.get_agent(h, TENANT, aid)
     assert detail["readiness"]["fail"] == 1

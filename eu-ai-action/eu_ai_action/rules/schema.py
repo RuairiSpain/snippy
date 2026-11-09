@@ -38,6 +38,7 @@ class Rule(BaseModel):
     version: int
     applies_when: Cond | None = None
     check: Check | None = None
+    per: Literal["agent", "incident", "request"] = "agent"
     evidence: list[str] = Field(default_factory=list)
     document: str
     source_citation: str

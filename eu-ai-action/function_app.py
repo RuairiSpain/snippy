@@ -99,6 +99,42 @@ def get_file(req: func.HttpRequest) -> func.HttpResponse:
     return func.HttpResponse(data, mimetype=ctype, headers={"Content-Disposition": f'attachment; filename="{p["doc_id"]}.{req.params.get("format", "pdf")}"'})
 
 
+@app.route(route="tenants/{tenant_id}/profile", methods=["GET"])
+def get_profile(req: func.HttpRequest) -> func.HttpResponse:
+    return _handle(lambda: get_api().get_profile(req.headers, req.route_params["tenant_id"]))
+
+
+@app.route(route="tenants/{tenant_id}/profile", methods=["PATCH"])
+def patch_profile(req: func.HttpRequest) -> func.HttpResponse:
+    return _handle(lambda: get_api().patch_profile(req.headers, req.route_params["tenant_id"], _body(req)))
+
+
+@app.route(route="tenants/{tenant_id}/audit", methods=["GET"])
+def audit_pack(req: func.HttpRequest) -> func.HttpResponse:
+    return _handle(lambda: get_api().audit_pack(req.headers, req.route_params["tenant_id"]))
+
+
+@app.route(route="tenants/{tenant_id}/documents/{doc_id}/verify", methods=["GET"])
+def verify_document(req: func.HttpRequest) -> func.HttpResponse:
+    p = req.route_params
+    return _handle(lambda: get_api().verify(req.headers, p["tenant_id"], p["doc_id"]))
+
+
+@app.route(route="tenants/{tenant_id}/export", methods=["POST"])
+def export_bundle(req: func.HttpRequest) -> func.HttpResponse:
+    """Evidence bundle (zip). The body may hold the customer's Compliance Manager export (.xlsx) to be filled in."""
+    try:
+        data = get_api().export_bundle(req.headers, req.route_params["tenant_id"], req.get_body() or None)
+    except ApiError as e:
+        return _json({"error": e.message}, e.status)
+    return func.HttpResponse(data, mimetype="application/zip", headers={"Content-Disposition": 'attachment; filename="eu-ai-action-evidence.zip"'})
+
+
+@app.route(route="tenants/{tenant_id}/notify", methods=["POST"])
+def notify(req: func.HttpRequest) -> func.HttpResponse:
+    return _handle(lambda: get_api().notify(req.headers, req.route_params["tenant_id"], req.params.get("portal_url", "")))
+
+
 @app.route(route="tenants/{tenant_id}/tasks", methods=["GET"])
 def list_tasks(req: func.HttpRequest) -> func.HttpResponse:
     return _handle(lambda: get_api().list_tasks(req.headers, req.route_params["tenant_id"]))
