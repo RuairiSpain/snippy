@@ -1,0 +1,3 @@
+foundry-finops>=0.1.0
+azure-identity>=1.17
+PyJWT[crypto]>=2.8

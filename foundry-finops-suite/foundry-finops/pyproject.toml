@@ -1,0 +1,78 @@
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+[project]
+name = "foundry-finops"
+dynamic = ["version"]
+description = "Pythonic SDK for Microsoft Foundry FinOps: cost controls, Cost Management, token usage, quota, tags, alerts, tracing and Azure API Management AI-gateway policies."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Ruairi O'Donnell" }]
+keywords = ["azure", "foundry", "finops", "cost-management", "openai", "apim", "llm", "tokens", "budgets"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "Intended Audience :: System Administrators",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: System :: Monitoring",
+  "Typing :: Typed",
+]
+dependencies = [
+  "requests>=2.31",
+  "azure-identity>=1.17",
+  "defusedxml>=0.7",
+]
+
+[project.optional-dependencies]
+pandas = ["pandas>=2.0"]
+tracing = [
+  "azure-ai-projects>=2.0.0",
+  "azure-monitor-opentelemetry>=1.6",
+  "opentelemetry-sdk>=1.27",
+  "azure-core-tracing-opentelemetry>=1.0.0b11",
+]
+dashboard = ["fastapi>=0.115", "uvicorn[standard]>=0.30"]
+dev = ["pytest>=8", "pytest-cov>=5", "ruff>=0.6", "mypy>=1.11", "types-requests", "build", "twine"]
+
+[project.scripts]
+foundry-finops = "foundry_finops.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/<your-org>/foundry-finops"
+Documentation = "https://github.com/<your-org>/foundry-finops#readme"
+Issues = "https://github.com/<your-org>/foundry-finops/issues"
+Changelog = "https://github.com/<your-org>/foundry-finops/blob/main/CHANGELOG.md"
+
+[tool.hatch.version]
+path = "src/foundry_finops/_version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/foundry_finops"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src", "tests", "README.md", "CHANGELOG.md", "LICENSE", "pyproject.toml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+packages = ["foundry_finops"]
