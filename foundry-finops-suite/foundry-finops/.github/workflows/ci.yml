@@ -13,4 +13,3 @@ jobs:
       - run: ruff check src tests
       - run: pytest --cov=foundry_finops
       - run: mypy
-        continue-on-error: true

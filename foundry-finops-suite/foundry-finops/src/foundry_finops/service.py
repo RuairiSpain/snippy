@@ -10,6 +10,7 @@ Configure with environment variables (see :class:`Settings`) and build with :fun
 
 from __future__ import annotations
 
+import logging
 import os
 from collections import defaultdict
 from dataclasses import asdict, dataclass
@@ -31,7 +32,11 @@ from .models import (
     TimeGrain,
 )
 
+logger = logging.getLogger("foundry_finops.service")
+
 GROUPINGS = ("project", "agent", "deployment", "model", "team")
+#: Cost-control states that need a person's attention.
+ATTENTION_STATES = ("Near threshold", "Limit reached", "Over budget")
 
 
 # ================================================================= settings
@@ -69,6 +74,12 @@ class Settings:
 
 class ReadOnlyError(PermissionError):
     pass
+
+
+def _check_group(group_by: str, allowed: tuple[str, ...] = GROUPINGS) -> str:
+    if group_by not in allowed:
+        raise ValueError(f"group_by must be one of: {', '.join(allowed)} (got {group_by!r})")
+    return group_by
 
 
 # ============================================================ payload helpers
@@ -128,8 +139,16 @@ def _with_status(row: dict[str, Any]) -> dict[str, Any]:
         row["percent_used"], row["state"] = None, "Usage unknown"
         return row
     pct = usage / amount * 100
-    alert = (row.get("alert") or {}).get("threshold") or 80
-    block = (row.get("block") or {}).get("threshold")
+
+    def as_pct(t: dict[str, Any] | None) -> float | None:
+        """Thresholds may be a percentage of the amount or an absolute amount."""
+        if not t or t.get("threshold") in (None, ""):
+            return None
+        value = float(t["threshold"])
+        return value / amount * 100 if str(t.get("threshold_type")) == "Absolute" else value
+
+    alert = as_pct(row.get("alert")) or 80
+    block = as_pct(row.get("block"))
     row["percent_used"] = round(pct, 1)
     row["state"] = ("Limit reached" if block and pct >= block else "Over budget" if pct >= 100
                     else "Near threshold" if pct >= alert else "On track")
@@ -218,8 +237,7 @@ class DemoService(_Base):
                 "tokens_24h": sum(r["InputTokens"] + r["OutputTokens"] for r in last24),
                 "requests_24h": sum(r["Requests"] for r in last24),
                 "cost_controls": len(ccs),
-                "cost_controls_attention": sum(1 for c in ccs if c["state"] in ("Near threshold", "Limit reached",
-                                                                                 "Over budget")),
+                "cost_controls_attention": sum(1 for c in ccs if c["state"] in ATTENTION_STATES),
                 "budgets": len(s.budgets),
                 "quota_max_pct": max((q["percent_used"] for q in s.quota), default=0),
             },
@@ -236,7 +254,7 @@ class DemoService(_Base):
         return [{"name": k, "cost": round(v, 2)} for k, v in sorted(agg.items(), key=lambda x: -x[1])]
 
     def cost_series(self, group_by: str = "project", days: int = 30) -> dict[str, Any]:
-        col = group_by.capitalize() if group_by in GROUPINGS else "Team"
+        col = _check_group(group_by).capitalize()
         agg: dict[tuple[str, str], float] = defaultdict(float)
         for r in self._since(self.store.cost_daily, timedelta(days=days)):
             agg[(r["TimeGenerated"][:10], r.get(col) or "(untagged)")] += r["Cost"]
@@ -244,7 +262,7 @@ class DemoService(_Base):
         return Table.from_records([dict(zip(["UsageDate", group_by, "Cost", "Currency"], r)) for r in rows]).to_json()
 
     def token_series(self, group_by: str = "deployment", hours: int = 168) -> dict[str, Any]:
-        col = group_by.capitalize() if group_by in GROUPINGS else "Deployment"
+        col = _check_group(group_by).capitalize()
         bucket = 1 if hours <= 48 else 6 if hours <= 336 else 24
         agg: dict[tuple[str, str], list[int]] = defaultdict(lambda: [0, 0, 0])
         for r in self._since(self.store.token_usage, timedelta(hours=hours)):
@@ -314,7 +332,7 @@ class DemoService(_Base):
         for t in self.store.tags:
             if t["scope"] == scope:
                 t["tags"] = dict(tags)
-                return t["tags"]
+                return dict(t["tags"])
         raise KeyError(f"Unknown scope {scope}")
 
     # ---- quota & deployments
@@ -326,7 +344,11 @@ class DemoService(_Base):
         d = next((x for x in self.store.deployments if x["name"] == deployment), None)
         if d is None:
             raise KeyError(deployment)
-        q = next(q for q in self.store.quota if q["name"].endswith(f".{d['sku_name']}.{d['model_name']}"))
+        if capacity < 1:
+            raise ValueError("capacity must be at least 1")
+        q = next((q for q in self.store.quota if q["name"].endswith(f".{d['sku_name']}.{d['model_name']}")), None)
+        if q is None:
+            raise ValueError(f"No quota record for deployment {deployment!r}")
         new_total = q["current_value"] - d["capacity"] + capacity
         if new_total > q["limit"]:
             raise ValueError(f"Not enough quota: {new_total} > {q['limit']} (thousands of TPM)")
@@ -508,41 +530,60 @@ class LiveService(_Base):
         return s
 
     def overview(self, days: int = 30) -> dict[str, Any]:
-        mtd = self.fo.cost.query(CostQuery.month_to_date().total())
-        spend = sum(r.get("Cost") or r.get("PreTaxCost") or 0 for r in mtd)
-        currency = next((r.get("Currency") for r in mtd), "USD")
-        now = datetime.now(timezone.utc)
+        """Headline numbers. A section that fails (RBAC, preview API, no data) is reported under
+        ``warnings`` and shown as empty instead of failing the whole overview."""
         import calendar
 
-        month_end = now.replace(day=calendar.monthrange(now.year, now.month)[1], hour=23, minute=59)
+        warnings: list[str] = []
+
+        def attempt(label: str, fn: Any, default: Any) -> Any:
+            try:
+                return fn()
+            except Exception as exc:
+                warnings.append(f"{label}: {_describe(exc)}")
+                return default
+
+        mtd = attempt("Cost Management", lambda: self.fo.cost.query(CostQuery.month_to_date().total()), None)
+        spend = _sum_cost(mtd) if mtd is not None else 0.0
+        currency = next((r.get("Currency") for r in mtd or [] if r.get("Currency")), "USD")
+        now = datetime.now(timezone.utc)
+        month_end = now.replace(day=calendar.monthrange(now.year, now.month)[1], hour=23, minute=59, second=59)
         forecast = spend
-        try:
-            fc = self.fo.cost.forecast(CostQuery.between(now.replace(day=1, hour=0, minute=0), month_end).total())
-            forecast = sum(r.get("Cost") or r.get("PreTaxCost") or 0 for r in fc) or spend
-        except Exception:  # forecast isn't available for every scope/offer
-            pass
-        tokens = self.fo.metrics.query(self._account_id, ["TokenTransaction", "AzureOpenAIRequests"], hours=24,
-                                       interval="PT1H")
-        ccs = self.list_cost_controls()
-        quota = self.list_quota()
-        top = self.cost_series("project", days)
-        return {
+        if mtd is not None:
+            try:  # forecast isn't available for every scope/offer, so a failure is not a warning
+                fc = self.fo.cost.forecast(
+                    CostQuery.between(now.replace(day=1, hour=0, minute=0, second=0), month_end).daily()
+                )
+                forecast = _sum_cost(fc) or spend
+            except Exception:
+                logger.debug("Forecast unavailable", exc_info=True)
+        tokens = attempt("Azure Monitor metrics", lambda: self.fo.metrics.query(
+            self._account_id, ["TokenTransaction", "AzureOpenAIRequests"], hours=24, interval="PT1H"), [])
+        ccs = attempt("Cost controls", self.list_cost_controls, [])
+        quota = attempt("Quota", self.list_quota, [])
+        budgets = attempt("Budgets", self.list_budgets, [])
+        tops: dict[str, list[dict[str, Any]]] = {}
+        for key, group in (("top_projects", "project"), ("top_agents", "agent"), ("top_models", "model")):
+            tops[key] = attempt(f"Cost by {group}", lambda g=group: _top_from_series(self.cost_series(g, days), g), [])
+        out: dict[str, Any] = {
             "currency": currency,
             "kpis": {
                 "spend_mtd": round(spend, 2), "forecast_month_end": round(forecast, 2),
                 "tokens_24h": int(sum(s.total for s in tokens if s.metric == "TokenTransaction")),
                 "requests_24h": int(sum(s.total for s in tokens if s.metric == "AzureOpenAIRequests")),
                 "cost_controls": len(ccs),
-                "cost_controls_attention": sum(1 for c in ccs if c.get("state") in ("Near threshold", "Limit reached")),
-                "budgets": len(self.list_budgets()),
+                "cost_controls_attention": sum(1 for c in ccs if c.get("state") in ATTENTION_STATES),
+                "budgets": len(budgets),
                 "quota_max_pct": max((q["percent_used"] for q in quota), default=0),
             },
-            "top_projects": _top_from_series(top, "project"),
-            "top_agents": _top_from_series(self.cost_series("agent", days), "agent"),
-            "top_models": _top_from_series(self.cost_series("model", days), "model"),
+            **tops,
         }
+        if warnings:
+            out["warnings"] = warnings
+        return out
 
     def cost_series(self, group_by: str = "project", days: int = 30) -> dict[str, Any]:
+        _check_group(group_by)
         tag = {"project": "project", "agent": "agent.name", "deployment": "deployment",
                "team": self.settings.team_tag}.get(group_by)
         if group_by == "model":
@@ -558,7 +599,14 @@ class LiveService(_Base):
         return Table.from_records(recs, "Cost").to_json()
 
     def token_series(self, group_by: str = "deployment", hours: int = 168) -> dict[str, Any]:
+        if group_by not in ("deployment", "model"):
+            raise ValueError(
+                "Azure Monitor metrics can only be split by 'deployment' or 'model'. Per project, agent or team "
+                "token counts need client-side tracing (see UsageTracker) or APIM token metrics: use run_kql_query."
+            )
         dim = "ModelName" if group_by == "model" else "ModelDeploymentName"
+        if hours < 1:
+            raise ValueError("hours must be at least 1")
         interval = "PT1H" if hours <= 48 else "PT6H" if hours <= 336 else "P1D"
         series = self.fo.metrics.query(self._account_id, ["ProcessedPromptTokens", "GeneratedTokens",
                                                           "AzureOpenAIRequests"],
@@ -630,6 +678,8 @@ class LiveService(_Base):
 
     def set_capacity(self, deployment: str, capacity: int) -> dict[str, Any]:
         self._guard()
+        if capacity < 1:
+            raise ValueError("capacity must be at least 1")
         d = self.fo.foundry.set_capacity(self._acct, deployment, capacity)
         return dict(d.to_json(), tokens_per_minute=d.tokens_per_minute)
 
@@ -728,8 +778,20 @@ class LiveService(_Base):
         render = None
         low = query.lower()
         if "| render" in low:
-            render = low.split("| render")[-1].split()[0]
+            tail = low.split("| render")[-1].split()
+            render = tail[0] if tail else None
         return {"columns": [{"name": c.name, "type": c.type} for c in t.columns], "rows": t.rows, "render": render}
+
+
+def _describe(exc: BaseException) -> str:
+    """One-line, user-safe description of an exception."""
+    message = getattr(exc, "message", None) or str(exc) or type(exc).__name__
+    status = getattr(exc, "status_code", None)
+    return f"HTTP {status}: {message}" if status else str(message)
+
+
+def _sum_cost(rows: Any) -> float:
+    return sum(float(r.get("Cost") or r.get("PreTaxCost") or 0) for r in rows)
 
 
 def _top_from_series(table: dict[str, Any], key: str) -> list[dict[str, Any]]:
@@ -744,7 +806,7 @@ def _top_from_series(table: dict[str, Any], key: str) -> list[dict[str, Any]]:
 def from_env(settings: Settings | None = None) -> FinOpsService:
     """Build a :class:`DemoService` or :class:`LiveService` from ``FINOPS_*`` environment variables."""
     s = settings or Settings.from_env()
-    return DemoService(s) if s.demo else LiveService(s)  # type: ignore[return-value]
+    return DemoService(s) if s.demo else LiveService(s)
 
 
 __all__ = ["DemoService", "FinOpsService", "LiveService", "ReadOnlyError", "Settings", "from_env"]

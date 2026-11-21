@@ -378,9 +378,14 @@
                 "type": "array",
                 "items": {
                   "type": "string"
-                }
+                },
+                "minItems": 1
               }
-            }
+            },
+            "required": [
+              "name",
+              "values"
+            ]
           },
           "actual_alert_pct": {
             "type": "number",

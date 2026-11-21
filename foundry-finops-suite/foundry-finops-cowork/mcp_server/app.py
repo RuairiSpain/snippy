@@ -27,6 +27,7 @@ from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 try:
@@ -34,15 +35,18 @@ try:
 except ImportError:  # running from the monorepo checkout
     sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "foundry-finops" / "src"))
 
-from foundry_finops.errors import HttpResponseError  # noqa: E402
+from foundry_finops.errors import FinOpsError, HttpResponseError  # noqa: E402
 from foundry_finops.service import DemoService, LiveService, ReadOnlyError, Settings  # noqa: E402
 
 from . import __version__  # noqa: E402
 from .auth import AuthConfig, AuthError, CredentialCache, TokenValidator, User  # noqa: E402
-from .tools import TOOLS, call  # noqa: E402
+from .tools import TOOLS, ToolArgumentError, call  # noqa: E402
 
 log = logging.getLogger("finops.mcp")
 SUPPORTED_PROTOCOLS = ("2025-11-25", "2025-06-18", "2025-03-26")
+MAX_BODY_BYTES = 2_000_000
+REQUEST_TIMEOUT_SECONDS = 30  #: socket timeout so a stalled client can't hold a thread forever
+LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1", "[::1]")
 INSTRUCTIONS = (
     "Foundry FinOps tools report Microsoft Foundry spend, token usage, cost controls, budgets, quota, tags, alerts and "
     "AI-gateway token limits for the signed-in user's Azure subscriptions. Billed cost lags usage by 8-24 hours; token "
@@ -73,11 +77,26 @@ class McpApp:
         client = FinOpsClient(s.subscription_id, cred, resource_group=s.resource_group or None)
         return LiveService(s, client)
 
+    def _release(self, service: Any) -> None:
+        """Close the per-request Azure client (its HTTP session would otherwise leak a socket per call)."""
+        if service is None or service is self.demo:
+            return
+        client = getattr(service, "fo", None)
+        if client is not None:
+            try:
+                client.close()
+            except Exception:  # noqa: BLE001
+                log.debug("Could not close client", exc_info=True)
+
     # ---------------------------------------------------------------- JSON-RPC
     def handle(self, msg: dict[str, Any], user: User | None) -> dict[str, Any] | None:
+        if not isinstance(msg, dict):
+            return _error(None, -32600, "Invalid request")
         mid, method, params = msg.get("id"), msg.get("method"), msg.get("params") or {}
         if mid is None:  # notification (e.g. notifications/initialized)
             return None
+        if not isinstance(params, dict) or not isinstance(method, str):
+            return _error(mid, -32600, "Invalid request")
         try:
             if method == "initialize":
                 requested = params.get("protocolVersion")
@@ -97,13 +116,23 @@ class McpApp:
                 name = params.get("name", "")
                 args = dict(params.get("arguments") or {})
                 started = time.monotonic()
+                service = None
                 try:
-                    result = call(self.service_for(user, args), name, args)
-                except (ValueError, KeyError, ReadOnlyError, HttpResponseError) as exc:
+                    service = self.service_for(user, args)
+                    result = call(service, name, args)
+                except ToolArgumentError as exc:
+                    result = _tool_error(str(exc))
+                except (ValueError, KeyError, ReadOnlyError, HttpResponseError, FinOpsError, AuthError) as exc:
                     text = exc.message if isinstance(exc, HttpResponseError) else str(exc).strip("'")
                     if isinstance(exc, HttpResponseError) and exc.status_code == 403:
-                        text = f"Azure denied access ({text}). The signed-in user needs a role such as Cost Management Reader or Foundry User on this scope."
-                    result = {"content": [{"type": "text", "text": text}], "isError": True}
+                        text = (f"Azure denied access ({text}). The signed-in user needs a role such as Cost "
+                                "Management Reader or Foundry User on this scope.")
+                    result = _tool_error(text)
+                except Exception as exc:  # noqa: BLE001 - report as a tool failure the model can read, not a protocol error
+                    log.exception("Tool %s failed", name)
+                    result = _tool_error(f"Unexpected error ({type(exc).__name__}). See the server log for details.")
+                finally:
+                    self._release(service)
                 log.info("tool=%s user=%s ok=%s ms=%d", name, user.oid if user else "-", not result.get("isError"),
                          (time.monotonic() - started) * 1000)
             else:
@@ -114,6 +143,10 @@ class McpApp:
         return {"jsonrpc": "2.0", "id": mid, "result": result}
 
 
+def _tool_error(text: str) -> dict[str, Any]:
+    return {"content": [{"type": "text", "text": text}], "isError": True}
+
+
 def _error(mid: Any, code: int, message: str) -> dict[str, Any]:
     return {"jsonrpc": "2.0", "id": mid, "error": {"code": code, "message": message}}
 
@@ -121,6 +154,7 @@ def _error(mid: Any, code: int, message: str) -> dict[str, Any]:
 def make_handler(app: McpApp) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
         server_version = f"FoundryFinOpsMCP/{__version__}"
+        timeout = REQUEST_TIMEOUT_SECONDS
 
         def log_message(self, fmt: str, *args: Any) -> None:
             log.debug(fmt, *args)
@@ -161,21 +195,39 @@ def make_handler(app: McpApp) -> type[BaseHTTPRequestHandler]:
         def do_DELETE(self) -> None:
             self._send(405, {"error": "Stateless server – no sessions to delete"}, {"Allow": "POST"})
 
+        def _origin_allowed(self) -> bool:
+            """Without authentication, only loopback pages may call us (blocks DNS-rebinding from a browser)."""
+            if app.auth is not None:
+                return True
+            origin = self.headers.get("Origin")
+            if not origin:
+                return True  # non-browser clients send no Origin
+            host = (urlparse(origin).hostname or "").lower()
+            return host in LOOPBACK_HOSTS or f"[{host}]" in LOOPBACK_HOSTS
+
         def do_POST(self) -> None:
             if not self.path.startswith("/mcp"):
                 return self._send(404, {"error": "Not found"})
+            if not self._origin_allowed():
+                return self._send(403, {"error": "Origin not allowed"})
             user = None
             if app.validator:
                 try:
                     user = app.validator.validate(self.headers.get("Authorization"))
                 except AuthError as exc:
-                    meta = f'{self._base_url()}/.well-known/oauth-protected-resource'
+                    meta = f"{self._base_url()}/.well-known/oauth-protected-resource"
+                    error = "insufficient_scope" if exc.status == 403 else "invalid_token"
                     return self._send(exc.status, {"error": str(exc)}, {
-                        "WWW-Authenticate": f'Bearer resource_metadata="{meta}", error="invalid_token"'})
-            length = int(self.headers.get("Content-Length") or 0)
+                        "WWW-Authenticate": f'Bearer resource_metadata="{meta}", error="{error}"'})
             try:
-                msg = json.loads(self.rfile.read(min(length, 2_000_000)) or b"null")
-            except json.JSONDecodeError:
+                length = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                return self._send(400, _error(None, -32600, "Invalid Content-Length"))
+            if length < 0 or length > MAX_BODY_BYTES:
+                return self._send(413, _error(None, -32600, "Request body too large"))
+            try:
+                msg = json.loads(self.rfile.read(length) or b"null")
+            except (json.JSONDecodeError, UnicodeDecodeError):
                 return self._send(400, _error(None, -32700, "Parse error"))
             headers = {"Mcp-Session-Id": self.headers.get("Mcp-Session-Id") or uuid.uuid4().hex}
             if isinstance(msg, list):
@@ -196,7 +248,9 @@ def build_app() -> McpApp:
     auth = AuthConfig.from_env()
     if not auth.tenant_id or not auth.client_id:
         raise SystemExit("Set AZURE_TENANT_ID and MCP_CLIENT_ID (or MCP_AUTH=none for local demo testing).")
-    settings = replace(settings, demo=os.environ.get("FINOPS_DEMO", "") == "1")
+    # With sign-in the subscription may come from each tool call, so a missing FINOPS_SUBSCRIPTION_ID
+    # must not silently select demo data: demo only when asked for explicitly.
+    settings = replace(settings, demo=os.environ.get("FINOPS_DEMO", "").lower() in ("1", "true", "yes"))
     return McpApp(auth=auth, settings=settings)
 
 

@@ -30,9 +30,14 @@ class FoundryMetrics:
 
 
 def _timespan(start: datetime | str | None, end: datetime | str | None, hours: int) -> str:
+    if hours < 1 and start is None:
+        raise ValueError("hours must be at least 1")
     end_dt = end or datetime.now(timezone.utc)
-    start_dt = start or (end_dt - timedelta(hours=hours) if isinstance(end_dt, datetime) else None)
-    return f"{iso_utc(start_dt)}/{iso_utc(end_dt)}"  # type: ignore[arg-type]
+    if start is None:
+        if not isinstance(end_dt, datetime):
+            raise ValueError("start is required when end is given as a string")
+        start = end_dt - timedelta(hours=hours)
+    return f"{iso_utc(start)}/{iso_utc(end_dt)}"
 
 
 class MetricsOperations(_Operations):
@@ -96,6 +101,8 @@ class LogsOperations(_Operations):
             body["timespan"] = timespan
         if extra:
             body.update(extra)
+        if not query or not query.strip():
+            raise ValueError("query is required")
         resp = self._t.request("POST", url, scope=self._cloud.logs_scope, json_body=body)
         tables = []
         for t in (resp.body or {}).get("tables") or []:
@@ -109,17 +116,19 @@ class LogsOperations(_Operations):
     ) -> Table:
         """Query a workspace by its **workspace (customer) ID** GUID. ``timespan`` is ISO-8601 (``P7D``)."""
         extra = {"workspaces": list(additional_workspaces)} if additional_workspaces else None
-        url = f"{self._cloud.log_analytics}/v1/workspaces/{workspace_id}/query"
+        url = f"{self._cloud.log_analytics.rstrip('/')}/v1/workspaces/{self._seg(workspace_id, 'workspace_id')}/query"
         return _first(self._post(url, query, timespan, extra))
 
     def query_resource(self, resource_id: str, query: str, *, timespan: str | None = "P1D") -> Table:
         """Resource-centric query, e.g. against the Application Insights resource used for tracing."""
-        url = f"{self._cloud.log_analytics}/v1{resource_id}/query"
+        if not resource_id.startswith("/subscriptions/") or "?" in resource_id or ".." in resource_id:
+            raise ValueError("resource_id must be a full Azure resource ID starting with /subscriptions/")
+        url = f"{self._cloud.log_analytics.rstrip('/')}/v1{resource_id}/query"
         return _first(self._post(url, query, timespan))
 
     def query(self, target: str, query: str, *, timespan: str | None = "P1D") -> Table:
         """Dispatch to :meth:`query_resource` for ARM IDs, else :meth:`query_workspace`."""
-        if target.startswith("/subscriptions/"):
+        if target.lower().startswith("/subscriptions/"):
             return self.query_resource(target, query, timespan=timespan)
         return self.query_workspace(target, query, timespan=timespan)
 

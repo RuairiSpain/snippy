@@ -58,7 +58,8 @@ class ArmResource:
         """JSON-serialisable dict for UIs/exports (not the ARM request body)."""
         d = asdict(self)
         d.pop("raw", None)
-        return _jsonable(d)
+        out: dict[str, Any] = _jsonable(d)
+        return out
 
 
 def _jsonable(o: Any) -> Any:
@@ -118,7 +119,9 @@ class Table:
         buf = io.StringIO()
         writer = csv.writer(buf)
         writer.writerow(self.column_names)
-        writer.writerows(self.rows)
+        writer.writerows(
+            [json.dumps(v, default=str) if isinstance(v, (dict, list)) else v for v in row] for row in self.rows
+        )
         return buf.getvalue()
 
     def to_json(self) -> dict[str, Any]:
@@ -246,6 +249,8 @@ class CostControl(ArmResource):
             raise ValueError("Cost control name must be 1-63 letters, numbers, hyphens or underscores")
         if self.amount <= 0:
             raise ValueError("amount must be positive")
+        if self.time_grain in (TimeGrain.QUARTERLY, TimeGrain.ANNUALLY):
+            raise ValueError("Cost controls reset Daily, Weekly or Monthly; Quarterly/Annually are for budgets")
         if self.category == BudgetCategory.TOKENS and int(self.amount) != self.amount:
             raise ValueError("Token limits must be whole numbers")
         if "agent" in self.filters and len(self.filters.get("project", [])) != 1:
@@ -328,14 +333,16 @@ class CostControl(ArmResource):
         for key, n in (p.get("notifications") or {}).items():
             alert = Threshold(
                 float(n.get("threshold", 0)),
-                ThresholdType(n.get("thresholdType", "Percentage")),
+                _enum(ThresholdType, n.get("thresholdType"), ThresholdType.PERCENTAGE),
                 key,
                 n.get("eventGridConnectionId"),
                 bool(n.get("enabled", True)),
             )
             break
         for key, a in ((p.get("providerProperties") or {}).get("actions") or {}).items():
-            block = Threshold(float(a.get("threshold", 0)), ThresholdType(a.get("thresholdType", "Percentage")), key)
+            block = Threshold(
+                float(a.get("threshold", 0)), _enum(ThresholdType, a.get("thresholdType"), ThresholdType.PERCENTAGE), key
+            )
             break
         tp = p.get("timePeriod") or {}
         rid = d.get("id") or ""
@@ -347,17 +354,25 @@ class CostControl(ArmResource):
             name=d.get("name"),
             type=d.get("type"),
             raw=dict(d),
-            category=BudgetCategory(p.get("category", "Cost")),
+            category=_enum(BudgetCategory, p.get("category"), BudgetCategory.COST),
             amount=float(p.get("amount", 0) or 0),
-            time_grain=TimeGrain(p.get("timeGrain", "Monthly")),
+            time_grain=_enum(TimeGrain, p.get("timeGrain"), TimeGrain.MONTHLY),
             start_date=tp.get("startDate"),
             end_date=tp.get("endDate"),
             filters=filters,
-            sharing=BudgetSharing(grouping) if grouping else BudgetSharing.SHARED,
+            sharing=_enum(BudgetSharing, grouping, BudgetSharing.SHARED),
             alert=alert,
             block=block,
             project=project,
         )
+
+
+def _enum(cls: Any, value: Any, default: Any) -> Any:
+    """Parse a service value into an enum, falling back so a new service value can't break listing."""
+    try:
+        return cls(value) if value else default
+    except ValueError:
+        return default
 
 
 def _pct(t: Threshold, amount: float) -> float:
@@ -449,8 +464,20 @@ class Budget(ArmResource):
     etag: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
+        if not self.name:
+            raise ValueError("budget.name is required")
+        if self.amount <= 0:
+            raise ValueError("amount must be positive")
+        for kind in ("Actual", "Forecasted"):
+            if sum(1 for n in self.notifications if n.threshold_type == kind) > 5:
+                raise ValueError(f"A budget allows at most 5 {kind} notifications")
+        for n in self.notifications:
+            if not (n.contact_emails or n.contact_groups or n.contact_roles):
+                raise ValueError(f"Notification at {n.threshold:g}% needs an email, action group or role to notify")
+            if n.threshold_type not in ("Actual", "Forecasted"):
+                raise ValueError("Notification threshold_type must be 'Actual' or 'Forecasted'")
         if not self.start_date:
-            today = date.today()
+            today = datetime.now(timezone.utc).date()
             self.start_date = iso_utc(date(today.year, today.month, 1))
         props: dict[str, Any] = {
             "category": "Cost",
@@ -559,8 +586,11 @@ class CostQuery:
     def last_days(cls, days: int) -> CostQuery:
         from datetime import timedelta
 
-        end = datetime.now(timezone.utc).replace(hour=23, minute=59, second=59, microsecond=0)
-        return cls.between(end - timedelta(days=days), end)
+        if days < 1:
+            raise ValueError("days must be at least 1")
+        today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        # `days` whole calendar days ending with today (a 23:59:59 start would drop most of the first day)
+        return cls.between(today - timedelta(days=days - 1), today.replace(hour=23, minute=59, second=59))
 
     # fluent modifiers
     def daily(self) -> CostQuery:

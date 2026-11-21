@@ -28,9 +28,14 @@ def main() -> None:
     sid = init.headers.get("Mcp-Session-Id")
     if sid:
         h["Mcp-Session-Id"] = sid
-    requests.post(a.url, headers=h, timeout=30, json={"jsonrpc": "2.0", "method": "notifications/initialized"})
-    tools = requests.post(a.url, headers=h, timeout=30,
-                          json={"jsonrpc": "2.0", "id": 2, "method": "tools/list"}).json()["result"]["tools"]
+    requests.post(a.url, headers=h, timeout=30,
+                  json={"jsonrpc": "2.0", "method": "notifications/initialized"}).raise_for_status()
+    listed = requests.post(a.url, headers=h, timeout=30, json={"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
+    listed.raise_for_status()
+    payload = listed.json()
+    if "error" in payload:
+        raise SystemExit(f"tools/list failed: {payload['error']}")
+    tools = payload["result"]["tools"]
     keep = ("name", "title", "description", "inputSchema", "annotations")
     doc = {"tools": [{k: t[k] for k in keep if k in t} for t in tools]}
     Path(a.out).parent.mkdir(parents=True, exist_ok=True)

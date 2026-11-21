@@ -14,14 +14,14 @@ class QuotaOperations(_Operations):
     :meth:`FoundryOperations.set_capacity`; to raise the regional limit, file a quota request."""
 
     def usages(self, location: str, *, filter: str | None = None) -> Iterator[QuotaUsage]:
-        url = f"{self.subscription_scope}/providers/Microsoft.CognitiveServices/locations/{location}/usages"
+        url = f"{self.subscription_scope}/providers/Microsoft.CognitiveServices/locations/{self._seg(location)}/usages"
         params = {"$filter": filter} if filter else None
         for d in self._list(url, self._v.cognitive_services, params):
             yield QuotaUsage.from_dict(d)
 
     def models(self, location: str) -> Iterator[dict[str, Any]]:
         """Models available in a region, including SKUs and their capacity limits."""
-        url = f"{self.subscription_scope}/providers/Microsoft.CognitiveServices/locations/{location}/models"
+        url = f"{self.subscription_scope}/providers/Microsoft.CognitiveServices/locations/{self._seg(location)}/models"
         yield from self._list(url, self._v.cognitive_services)
 
     def account_usages(self, account: str, resource_group: str | None = None) -> Iterator[QuotaUsage]:

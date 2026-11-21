@@ -188,7 +188,7 @@ class CostManagementTests(unittest.TestCase):
     def test_budget_roundtrip(self):
         b = Budget(name="b1", amount=100, start_date="2026-11-01",
                    notifications=[BudgetNotification(80, ["a@b.com"]),
-                                  BudgetNotification(100, threshold_type="Forecasted")])
+                                  BudgetNotification(100, ["a@b.com"], threshold_type="Forecasted")])
         body = b.to_dict()
         self.assertEqual(body["properties"]["timePeriod"]["startDate"], "2026-11-01T00:00:00Z")
         self.assertEqual(len(body["properties"]["notifications"]), 2)

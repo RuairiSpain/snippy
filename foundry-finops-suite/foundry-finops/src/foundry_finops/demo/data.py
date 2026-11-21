@@ -192,7 +192,7 @@ class DemoStore:
         ]
 
     def _quota(self) -> list[dict[str, Any]]:
-        used = {}
+        used: dict[str, int] = {}
         for d in self.deployments:
             key = f"OpenAI.{d['sku_name']}.{d['model_name']}"
             used[key] = used.get(key, 0) + d["capacity"]

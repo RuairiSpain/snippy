@@ -9,6 +9,7 @@ budgets and cost data they already have access to.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import threading
 import time
@@ -72,6 +73,8 @@ class User:
     name: str
     scopes: tuple[str, ...]
     token: str = field(repr=False)
+    #: Token expiry (epoch seconds); the cached on-behalf-of credential is dropped by then.
+    expires_at: float = 0.0
 
 
 class TokenValidator:
@@ -93,6 +96,8 @@ class TokenValidator:
                 token, key, algorithms=["RS256"], audience=self.config.audiences,
                 options={"require": ["exp", "iat", "aud", "iss", "tid"]}, leeway=60,
             )
+        except jwt.PyJWKClientConnectionError as exc:  # Entra's key endpoint is unreachable: not the caller's fault
+            raise AuthError("Cannot fetch token signing keys; try again shortly", status=503) from exc
         except jwt.PyJWTError as exc:
             raise AuthError(f"Invalid token: {exc}") from exc
         if claims.get("iss") not in self.config.issuers:
@@ -103,7 +108,7 @@ class TokenValidator:
         return User(
             oid=claims.get("oid", ""), tid=claims["tid"],
             upn=claims.get("preferred_username") or claims.get("upn") or "", name=claims.get("name", ""),
-            scopes=scopes, token=token,
+            scopes=scopes, token=token, expires_at=float(claims.get("exp") or 0),
         )
 
 
@@ -142,7 +147,7 @@ class CredentialCache:
         self._lock = threading.Lock()
 
     def for_user(self, user: User) -> Any:
-        key = f"{user.oid}:{hash(user.token)}"
+        key = f"{user.oid}:{hashlib.sha256(user.token.encode()).hexdigest()}"
         now = time.time()
         with self._lock:
             hit = self._items.get(key)
@@ -150,6 +155,8 @@ class CredentialCache:
                 return hit[1]
             if len(self._items) >= self._max:
                 self._items = {k: v for k, v in self._items.items() if v[0] > now}
+                while len(self._items) >= self._max:  # all still valid: drop the entry closest to expiry
+                    self._items.pop(min(self._items, key=lambda k: self._items[k][0]))
             cred = self.factory(user.token)
-            self._items[key] = (now + 3000, cred)
+            self._items[key] = (min(now + 3000, user.expires_at or now + 3000), cred)
             return cred

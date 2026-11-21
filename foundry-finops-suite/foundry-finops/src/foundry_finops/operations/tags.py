@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterator, Mapping
 from typing import Any
 
+from .._ids import odata_quote as _odata
 from ._base import _Operations
 
 
@@ -19,6 +20,9 @@ class TagOperations(_Operations):
 
     @staticmethod
     def _tags(scope: str) -> str:
+        scope = (scope or "").strip()
+        if not scope.startswith("/subscriptions/") or "?" in scope or "#" in scope or ".." in scope.split("/"):
+            raise ValueError("scope must be an Azure resource ID starting with /subscriptions/")
         return f"{scope.rstrip('/')}/providers/Microsoft.Resources/tags/default"
 
     def get(self, scope: str) -> dict[str, str]:
@@ -38,7 +42,10 @@ class TagOperations(_Operations):
     def remove(self, scope: str, *names: str) -> dict[str, str]:
         """Remove tags by name (values are ignored)."""
         current = self.get(scope)
-        return self._patch(scope, "Delete", {n: current.get(n, "") for n in names if n in current})
+        doomed = {n: current[n] for n in names if n in current}
+        if not doomed:  # ARM rejects an empty Delete patch
+            return current
+        return self._patch(scope, "Delete", doomed)
 
     def clear(self, scope: str) -> None:
         self._arm("DELETE", self._tags(scope), self._v.tags)
@@ -54,7 +61,7 @@ class TagOperations(_Operations):
         yield from self._list(f"{self.subscription_scope}/tagNames", self._v.resources)
 
     def resources_with_tag(self, name: str, value: str | None = None) -> Iterator[dict[str, Any]]:
-        flt = f"tagName eq '{name}'" + (f" and tagValue eq '{value}'" if value is not None else "")
+        flt = f"tagName eq '{_odata(name)}'" + (f" and tagValue eq '{_odata(value)}'" if value is not None else "")
         yield from self._list(f"{self.subscription_scope}/resources", self._v.resources, {"$filter": flt})
 
     def list_tagged(self, resource_type: str = "Microsoft.CognitiveServices/accounts") -> list[dict[str, Any]]:
@@ -62,7 +69,7 @@ class TagOperations(_Operations):
         out = []
         for r in self._list(
             f"{self.subscription_scope}/resources", self._v.resources,
-            {"$filter": f"resourceType eq '{resource_type}'"},
+            {"$filter": f"resourceType eq '{_odata(resource_type)}'"},
         ):
             out.append({"id": r.get("id"), "name": r.get("name"), "type": r.get("type"),
                         "location": r.get("location"), "tags": r.get("tags") or {}})

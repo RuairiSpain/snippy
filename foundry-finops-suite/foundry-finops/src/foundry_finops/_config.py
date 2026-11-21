@@ -20,6 +20,8 @@ class AzureCloud:
     resource_manager: str
     log_analytics: str
     retail_prices: str = "https://prices.azure.com/api/retail/prices"
+    #: Microsoft Entra authority host used by ``DefaultAzureCredential`` for this cloud.
+    authority: str = "login.microsoftonline.com"
 
     @property
     def arm_scope(self) -> str:
@@ -39,11 +41,13 @@ US_GOV_CLOUD = AzureCloud(
     name="AzureUSGovernment",
     resource_manager="https://management.usgovcloudapi.net",
     log_analytics="https://api.loganalytics.us",
+    authority="login.microsoftonline.us",
 )
 CHINA_CLOUD = AzureCloud(
     name="AzureChinaCloud",
     resource_manager="https://management.chinacloudapi.cn",
     log_analytics="https://api.loganalytics.azure.cn",
+    authority="login.chinacloudapi.cn",
 )
 
 

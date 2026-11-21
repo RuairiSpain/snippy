@@ -6,6 +6,7 @@ from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
+from .._ids import odata_quote as _odata
 from ._base import _Operations
 
 
@@ -32,13 +33,30 @@ class PriceSheet:
 
     @classmethod
     def from_mapping(cls, data: Mapping[str, Mapping[str, float]], currency: str = "USD") -> PriceSheet:
-        return cls({k.lower(): ModelPrice(**v) for k, v in data.items()}, currency)
+        prices: dict[str, ModelPrice] = {}
+        for model, v in data.items():
+            try:
+                prices[model.lower()] = ModelPrice(**v)
+            except TypeError as exc:
+                raise ValueError(
+                    f"Invalid price for {model!r}: use keys input, output and optionally cached_input ({exc})"
+                ) from exc
+        return cls(prices, currency)
 
     def lookup(self, model: str) -> ModelPrice | None:
+        """Exact match, else the longest price key the model name extends with a version/date suffix.
+
+        ``gpt-5.4-mini-2026-03-01`` resolves to ``gpt-5.4-mini``, but ``gpt-4o-mini`` must *not* fall
+        back to ``gpt-4o``: a different model has a different price.
+        """
         m = model.lower()
         if m in self.prices:
             return self.prices[m]
-        best = max((k for k in self.prices if m.startswith(k)), key=len, default=None)
+        best = max(
+            (k for k in self.prices if m.startswith(k + "-") and m[len(k) + 1 : len(k) + 2].isdigit()),
+            key=len,
+            default=None,
+        )
         return self.prices.get(best) if best else None
 
     def estimate(self, model: str, input_tokens: int, output_tokens: int, cached_tokens: int = 0) -> float | None:
@@ -46,8 +64,9 @@ class PriceSheet:
         if p is None:
             return None
         cached_rate = p.cached_input if p.cached_input is not None else p.input
-        uncached = max(input_tokens - cached_tokens, 0)
-        return round((uncached * p.input + cached_tokens * cached_rate + output_tokens * p.output) / 1_000_000, 6)
+        cached = min(max(cached_tokens, 0), max(input_tokens, 0))  # cached tokens are a subset of the input
+        uncached = max(input_tokens, 0) - cached
+        return round((uncached * p.input + cached * cached_rate + max(output_tokens, 0) * p.output) / 1_000_000, 6)
 
 
 class PricingOperations(_Operations):
@@ -70,11 +89,16 @@ class PricingOperations(_Operations):
         Meter naming changes over time, so check the result and override with your own prices.
         """
         sheet: dict[str, dict[str, float]] = {}
-        flt = f"serviceName eq '{service_name}' and armRegionName eq '{region}'"
+        flt = f"serviceName eq '{_odata(service_name)}' and armRegionName eq '{_odata(region)}'"
         for item in self.retail_prices(flt):
+            if item.get("type") not in (None, "Consumption"):  # skip reservations and dev/test meters
+                continue
             meter = (item.get("meterName") or "").lower()
             unit = (item.get("unitOfMeasure") or "").upper()
-            price = float(item.get("retailPrice") or 0)
+            try:
+                price = float(item.get("retailPrice") or 0)
+            except (TypeError, ValueError):
+                continue
             mult = 1000 if unit.startswith("1K") else 1 if unit.startswith("1M") else None
             if mult is None or "batch" in meter or "ft" in meter.split():
                 continue
@@ -82,6 +106,7 @@ class PricingOperations(_Operations):
             if not kind:
                 continue
             model = meter.split(" inp")[0].split(" outp")[0].split(" cached")[0].replace(" glbl", "").strip()
-            sheet.setdefault(model, {"input": 0.0, "output": 0.0}).setdefault(kind, price * mult)
-            sheet[model][kind] = sheet[model].get(kind) or price * mult
+            entry = sheet.setdefault(model, {"input": 0.0, "output": 0.0})
+            if not entry.get(kind):  # keep the first non-zero meter per kind
+                entry[kind] = price * mult
         return PriceSheet.from_mapping({k: v for k, v in sheet.items() if v.get("input") and v.get("output")})

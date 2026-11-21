@@ -21,19 +21,22 @@ authentication (for example App Service Easy Auth) and keep FINOPS_READ_ONLY=1 f
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import logging
 import mimetypes
 import re
 import sys
 import traceback
-from http import HTTPStatus
+from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
 HERE = Path(__file__).resolve().parent
+MAX_BODY_BYTES = 1_000_000
+LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 sys.path.insert(0, str(HERE.parents[1] / "src"))  # run from a source checkout without installing
 
 from foundry_finops.errors import HttpResponseError  # noqa: E402
@@ -124,6 +127,14 @@ def tl_delete(s, q, p, b): return s.delete_token_limit(q["scope"])
 class App(BaseHTTPRequestHandler):
     service: FinOpsService
     server_version = "FoundryFinOpsDashboard/0.1"
+    timeout = 30  # seconds: a stalled client must not hold a thread forever
+    #: Host header values accepted. Empty = loopback names only (blocks DNS-rebinding against a local server).
+    allowed_hosts: frozenset[str] = frozenset()
+
+    def _host_ok(self) -> bool:
+        raw = (self.headers.get("Host") or "").strip().lower()
+        host = raw.rsplit(":", 1)[0].strip("[]") if raw.count(":") <= 1 or raw.startswith("[") else raw.strip("[]")
+        return host in LOOPBACK_HOSTS or host in self.allowed_hosts
 
     def log_message(self, fmt: str, *args: Any) -> None:
         log.info("%s - %s", self.address_string(), fmt % args)
@@ -144,6 +155,8 @@ class App(BaseHTTPRequestHandler):
                    {"Cache-Control": "no-store"})
 
     def _dispatch(self, method: str) -> None:
+        if not self._host_ok():
+            return self._json(403, {"error": "Host not allowed"})
         url = urlparse(self.path)
         path = unquote(url.path)
         if not path.startswith("/api/"):
@@ -152,12 +165,19 @@ class App(BaseHTTPRequestHandler):
             return self._json(403, {"error": "Missing X-Requested-With header"})  # simple CSRF guard
         query = {k: v[-1] for k, v in parse_qs(url.query).items()}
         body: Any = {}
-        length = int(self.headers.get("Content-Length") or 0)
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            return self._json(400, {"error": "Invalid Content-Length"})
+        if length < 0 or length > MAX_BODY_BYTES:
+            return self._json(413, {"error": "Request body too large"})
         if length:
             try:
-                body = json.loads(self.rfile.read(min(length, 1_000_000)))
-            except json.JSONDecodeError:
+                body = json.loads(self.rfile.read(length))
+            except (json.JSONDecodeError, UnicodeDecodeError):
                 return self._json(400, {"error": "Body must be JSON"})
+            if not isinstance(body, dict):
+                return self._json(400, {"error": "Body must be a JSON object"})
         for m, rx, fn in ROUTES:
             match = rx.match(path)
             if m == method and match:
@@ -169,8 +189,9 @@ class App(BaseHTTPRequestHandler):
                 except (ValueError, KeyError) as e:
                     return self._json(400, {"error": str(e).strip("'")})
                 except HttpResponseError as e:
-                    return self._json(e.status_code if 400 <= e.status_code < 600 else 502,
-                                      {"error": e.message, "code": e.code})
+                    # 401 here means the *server's* Azure identity failed, which the browser can't fix
+                    status = e.status_code if 400 <= e.status_code < 600 and e.status_code != 401 else 502
+                    return self._json(status, {"error": e.message, "code": e.code})
                 except Exception as e:  # keep the server up, log the detail
                     log.error("Unhandled error: %s\n%s", e, traceback.format_exc())
                     return self._json(500, {"error": f"{type(e).__name__}: {e}"})
@@ -178,7 +199,10 @@ class App(BaseHTTPRequestHandler):
 
     def _static(self, path: str) -> None:
         rel = "index.html" if path in ("/", "") else path.lstrip("/")
-        target = (STATIC / rel).resolve()
+        try:
+            target = (STATIC / rel).resolve()
+        except (ValueError, OSError):  # NUL bytes and other unresolvable paths
+            target = STATIC / "index.html"
         if STATIC not in target.parents or not target.is_file():
             target = STATIC / "index.html"
         ctype = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
@@ -192,21 +216,25 @@ class App(BaseHTTPRequestHandler):
 
 def make_server(host: str = "127.0.0.1", port: int = 8765, service: FinOpsService | None = None) -> ThreadingHTTPServer:
     App.service = service or from_env()
-    return ThreadingHTTPServer((host, port), App)
+    App.allowed_hosts = frozenset({host.lower()} - {"0.0.0.0", "::"})
+    srv = ThreadingHTTPServer((host, port), App)
+    srv.daemon_threads = True
+    return srv
 
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="Foundry FinOps dashboard")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8765)
+    ap.add_argument("--allow-host", action="append", default=[], metavar="NAME",
+                    help="extra Host header value to accept when served behind a proxy (repeatable)")
     args = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     srv = make_server(args.host, args.port)
+    App.allowed_hosts = App.allowed_hosts | {h.lower() for h in args.allow_host}
     log.info("Foundry FinOps dashboard (%s mode) on http://%s:%s", App.service.info()["mode"], args.host, args.port)
-    try:
+    with contextlib.suppress(KeyboardInterrupt):
         srv.serve_forever()
-    except KeyboardInterrupt:
-        pass
 
 
 if __name__ == "__main__":

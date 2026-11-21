@@ -7,6 +7,7 @@ user to confirm before running them.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -151,7 +152,8 @@ TOOLS: list[Tool] = [
           "start_date": {"type": "string", "description": "First day of a month, YYYY-MM-DD."},
           "end_date": {"type": "string"},
           "tag_filter": {"type": "object", "description": "Optional tag filter, e.g. {\"name\":\"team\",\"values\":[\"Support\"]}.",
-                         "properties": {"name": {"type": "string"}, "values": {"type": "array", "items": {"type": "string"}}}},
+                         "properties": {"name": {"type": "string"}, "values": {"type": "array", "items": {"type": "string"}, "minItems": 1}},
+                         "required": ["name", "values"]},
           "actual_alert_pct": {"type": "number", "default": 80},
           "forecast_alert_pct": {"type": "number", "default": 100},
           "contact_emails": {"type": "array", "items": {"type": "string"}}},
@@ -218,10 +220,66 @@ TOOLS: list[Tool] = [
 BY_NAME = {t.name: t for t in TOOLS}
 
 
+class ToolArgumentError(ValueError):
+    """The model sent arguments that don't match the tool's input schema."""
+
+
+_TYPES: dict[str, Any] = {
+    "string": str, "boolean": bool, "object": dict, "array": list, "integer": int, "number": (int, float),
+}
+
+
+def _validate(schema: dict[str, Any], value: Any, path: str) -> None:
+    """Check ``value`` against the subset of JSON Schema that the tool catalogue uses.
+
+    Hosts are supposed to validate against ``inputSchema`` but aren't required to, and these tools
+    can change spend limits and quota, so the server enforces the schema itself.
+    """
+    kind = schema.get("type")
+    if kind:
+        expected = _TYPES[kind]
+        if isinstance(value, bool) and kind in ("integer", "number"):
+            raise ToolArgumentError(f"{path} must be a {kind}")
+        if not isinstance(value, expected):
+            raise ToolArgumentError(f"{path} must be a {kind}")
+    if "enum" in schema and value not in schema["enum"]:
+        raise ToolArgumentError(f"{path} must be one of {', '.join(map(str, schema['enum']))}")
+    if isinstance(value, (int, float)):
+        if "minimum" in schema and value < schema["minimum"]:
+            raise ToolArgumentError(f"{path} must be at least {schema['minimum']}")
+        if "maximum" in schema and value > schema["maximum"]:
+            raise ToolArgumentError(f"{path} must be at most {schema['maximum']}")
+        if "exclusiveMinimum" in schema and value <= schema["exclusiveMinimum"]:
+            raise ToolArgumentError(f"{path} must be greater than {schema['exclusiveMinimum']}")
+    if isinstance(value, str) and "pattern" in schema and not re.search(schema["pattern"], value):
+        raise ToolArgumentError(f"{path} must match {schema['pattern']}")
+    if isinstance(value, dict):
+        props = schema.get("properties") or {}
+        for req in schema.get("required") or ():
+            if value.get(req) in (None, ""):
+                raise ToolArgumentError(f"{path}.{req} is required" if path else f"{req} is required")
+        extra = schema.get("additionalProperties")
+        for key, item in value.items():
+            if key in props:
+                _validate(props[key], item, f"{path}.{key}" if path else key)
+            elif isinstance(extra, dict):
+                _validate(extra, item, f"{path}.{key}" if path else key)
+            elif extra is False:
+                raise ToolArgumentError(f"Unknown argument {key!r}" if not path else f"{path}: unknown key {key!r}")
+    if isinstance(value, list) and isinstance(schema.get("items"), dict):
+        for i, item in enumerate(value):
+            _validate(schema["items"], item, f"{path}[{i}]")
+
+
 def call(service: FinOpsService, name: str, args: dict[str, Any]) -> dict[str, Any]:
     tool = BY_NAME.get(name)
     if tool is None:
-        raise KeyError(f"Unknown tool: {name}")
+        raise ToolArgumentError(f"Unknown tool: {name}")
+    schema = tool.schema()["inputSchema"]
+    # Scope overrides (subscription_id, ...) were consumed by the caller; only nulls can remain.
+    clean = {k: v for k, v in args.items() if v is not None}
+    _validate(schema, clean, "")
+    args = clean
     result = tool.handler(service, args)
     return {"content": [{"type": "text", "text": json.dumps(result, default=str)}],
             "structuredContent": result if isinstance(result, dict) else {"items": result},

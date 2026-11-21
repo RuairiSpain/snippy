@@ -22,7 +22,7 @@ class CostControlOperations(_Operations):
     def _base(self, account: str, project: str | None, resource_group: str | None) -> str:
         rid = foundry_account_id(self._sub, self._rg_or_default(resource_group), account)
         if project:
-            rid += f"/projects/{project}"
+            rid += f"/projects/{self._seg(project)}"
         return f"{rid}/costControls"
 
     def list(
@@ -46,7 +46,7 @@ class CostControlOperations(_Operations):
     def get(
         self, account: str, name: str, *, project: str | None = None, resource_group: str | None = None
     ) -> CostControl:
-        url = f"{self._base(account, project, resource_group)}/{name}"
+        url = f"{self._base(account, project, resource_group)}/{self._seg(name)}"
         return CostControl.from_dict(self._arm("GET", url, self._v.cost_controls).body)
 
     def create_or_update(
@@ -85,7 +85,7 @@ class CostControlOperations(_Operations):
         """
         if "category" in properties:
             raise ValueError("A cost control's budget type can't be changed; create a new one")
-        url = f"{self._base(account, project, resource_group)}/{name}"
+        url = f"{self._base(account, project, resource_group)}/{self._seg(name)}"
         resp = self._arm("PATCH", url, self._v.cost_controls, body={"properties": properties})
         return CostControl.from_dict(resp.body) if resp.body else self.get(
             account, name, project=project, resource_group=resource_group
@@ -94,7 +94,7 @@ class CostControlOperations(_Operations):
     def delete(
         self, account: str, name: str, *, project: str | None = None, resource_group: str | None = None
     ) -> None:
-        url = f"{self._base(account, project, resource_group)}/{name}"
+        url = f"{self._base(account, project, resource_group)}/{self._seg(name)}"
         self._arm("DELETE", url, self._v.cost_controls)
 
     def find_event_grid_connection_id(self, account: str, *, resource_group: str | None = None) -> str | None:

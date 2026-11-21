@@ -25,15 +25,15 @@ class AlertOperations(_Operations):
             yield MetricAlert.from_dict(d)
 
     def get_metric_alert(self, name: str, resource_group: str | None = None) -> MetricAlert:
-        url = f"{self._p('metricAlerts', resource_group)}/{name}"
+        url = f"{self._p('metricAlerts', resource_group)}/{self._seg(name)}"
         return MetricAlert.from_dict(self._arm("GET", url, self._v.metric_alerts).body)
 
     def create_or_update_metric_alert(self, alert: MetricAlert, resource_group: str | None = None) -> MetricAlert:
-        url = f"{self._p('metricAlerts', resource_group)}/{alert.name}"
+        url = f"{self._p('metricAlerts', resource_group)}/{self._seg(alert.name)}"
         return MetricAlert.from_dict(self._arm("PUT", url, self._v.metric_alerts, body=alert.to_dict()).body)
 
     def delete_metric_alert(self, name: str, resource_group: str | None = None) -> None:
-        self._arm("DELETE", f"{self._p('metricAlerts', resource_group)}/{name}", self._v.metric_alerts)
+        self._arm("DELETE", f"{self._p('metricAlerts', resource_group)}/{self._seg(name)}", self._v.metric_alerts)
 
     # -------------------------------------------------------------- log alerts
     def list_log_alerts(self, resource_group: str | None = None) -> Iterator[LogAlert]:
@@ -41,18 +41,18 @@ class AlertOperations(_Operations):
             yield LogAlert.from_dict(d)
 
     def get_log_alert(self, name: str, resource_group: str | None = None) -> LogAlert:
-        url = f"{self._p('scheduledQueryRules', resource_group)}/{name}"
+        url = f"{self._p('scheduledQueryRules', resource_group)}/{self._seg(name)}"
         return LogAlert.from_dict(self._arm("GET", url, self._v.scheduled_query_rules).body)
 
     def create_or_update_log_alert(self, alert: LogAlert, resource_group: str | None = None) -> LogAlert:
         if not alert.location:
             raise ValueError("Log alerts need a location (the region of the target workspace)")
-        url = f"{self._p('scheduledQueryRules', resource_group)}/{alert.name}"
+        url = f"{self._p('scheduledQueryRules', resource_group)}/{self._seg(alert.name)}"
         body = alert.to_dict()
         return LogAlert.from_dict(self._arm("PUT", url, self._v.scheduled_query_rules, body=body).body)
 
     def delete_log_alert(self, name: str, resource_group: str | None = None) -> None:
-        url = f"{self._p('scheduledQueryRules', resource_group)}/{name}"
+        url = f"{self._p('scheduledQueryRules', resource_group)}/{self._seg(name)}"
         self._arm("DELETE", url, self._v.scheduled_query_rules)
 
     # ----------------------------------------------------------- action groups
@@ -61,8 +61,8 @@ class AlertOperations(_Operations):
             yield ActionGroup.from_dict(d)
 
     def create_or_update_action_group(self, group: ActionGroup, resource_group: str | None = None) -> ActionGroup:
-        url = f"{self._p('actionGroups', resource_group)}/{group.name}"
+        url = f"{self._p('actionGroups', resource_group)}/{self._seg(group.name)}"
         return ActionGroup.from_dict(self._arm("PUT", url, self._v.action_groups, body=group.to_dict()).body)
 
     def delete_action_group(self, name: str, resource_group: str | None = None) -> None:
-        self._arm("DELETE", f"{self._p('actionGroups', resource_group)}/{name}", self._v.action_groups)
+        self._arm("DELETE", f"{self._p('actionGroups', resource_group)}/{self._seg(name)}", self._v.action_groups)

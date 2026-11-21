@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator, Mapping
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from ..models import Budget, Column, CostQuery, Table
@@ -68,15 +68,23 @@ class CostManagementOperations(_Operations):
         end: datetime | str | None = None,
         days: int = 30,
         daily: bool = True,
+        dimension: bool | None = None,
     ) -> Table:
         """Cost grouped by a Foundry tag (``project``/``deployment``/``agent.name``/your tag) or dimension.
 
-        To group by the ``project`` tag, pass the Foundry resource ID as ``scope``.
+        To group by the ``project`` tag, pass the Foundry resource ID as ``scope``. A name that
+        starts with a capital letter is treated as a dimension (``MeterSubCategory``); pass
+        ``dimension=False`` for a tag whose name is capitalised, or ``True`` to force a dimension.
         """
+        if bool(start) != bool(end):
+            raise ValueError("Pass both start and end, or neither (then the last `days` days are used)")
+        if not start and days < 1:
+            raise ValueError("days must be at least 1")
         q = CostQuery.between(start, end) if start and end else CostQuery.last_days(days)
         q = q.daily() if daily else q.total()
-        is_dimension = tag_or_dimension[:1].isupper()  # Cost Management dimensions are PascalCase
-        q = q.group_by(tag_or_dimension) if is_dimension else q.group_by_tag(tag_or_dimension)
+        if dimension is None:  # Cost Management dimensions are PascalCase, Foundry/team tags are lower case
+            dimension = tag_or_dimension[:1].isupper()
+        q = q.group_by(tag_or_dimension) if dimension else q.group_by_tag(tag_or_dimension)
         return self.query(q, scope=scope)
 
     def dimensions(self, *, scope: str | None = None) -> list[dict[str, Any]]:
@@ -92,7 +100,7 @@ class CostManagementOperations(_Operations):
             yield Budget.from_dict(d)
 
     def get_budget(self, name: str, *, scope: str | None = None) -> Budget:
-        return Budget.from_dict(self._arm("GET", f"{self._budgets(scope)}/{name}", self._v.cost_management).body)
+        return Budget.from_dict(self._arm("GET", f"{self._budgets(scope)}/{self._seg(name)}", self._v.cost_management).body)
 
     def create_or_update_budget(self, budget: Budget, *, scope: str | None = None) -> Budget:
         """Create or replace a budget. Up to 5 Actual and 5 Forecasted notifications.
@@ -105,7 +113,7 @@ class CostManagementOperations(_Operations):
         return Budget.from_dict(self._arm("PUT", url, self._v.cost_management, body=budget.to_dict()).body)
 
     def delete_budget(self, name: str, *, scope: str | None = None) -> None:
-        self._arm("DELETE", f"{self._budgets(scope)}/{name}", self._v.cost_management)
+        self._arm("DELETE", f"{self._budgets(scope)}/{self._seg(name)}", self._v.cost_management)
 
     # ---------------------------------------------------------------- exports
     def _exports(self, scope: str | None) -> str:
@@ -133,7 +141,11 @@ class CostManagementOperations(_Operations):
         """Schedule a recurring cost export to a storage account (the recommended bulk-data path)."""
         from ..models import iso_utc
 
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
+        try:
+            default_end = now.replace(year=now.year + 1)
+        except ValueError:  # 29 February
+            default_end = now.replace(year=now.year + 1, day=28)
         body = {
             "properties": {
                 "schedule": {
@@ -141,7 +153,7 @@ class CostManagementOperations(_Operations):
                     "recurrence": recurrence,
                     "recurrencePeriod": {
                         "from": iso_utc(start or now),
-                        "to": iso_utc(end or now.replace(year=now.year + 1)),
+                        "to": iso_utc(end or default_end),
                     },
                 },
                 "format": file_format,
@@ -155,17 +167,17 @@ class CostManagementOperations(_Operations):
                 "definition": {"type": cost_type, "timeframe": timeframe, "dataSet": {"granularity": "Daily"}},
             }
         }
-        return dict(self._arm("PUT", f"{self._exports(scope)}/{name}", self._v.cost_management, body=body).body or {})
+        return dict(self._arm("PUT", f"{self._exports(scope)}/{self._seg(name)}", self._v.cost_management, body=body).body or {})
 
     def run_export(self, name: str, *, scope: str | None = None) -> None:
-        self._arm("POST", f"{self._exports(scope)}/{name}/run", self._v.cost_management)
+        self._arm("POST", f"{self._exports(scope)}/{self._seg(name)}/run", self._v.cost_management)
 
     def export_history(self, name: str, *, scope: str | None = None) -> list[dict[str, Any]]:
-        url = f"{self._exports(scope)}/{name}/runHistory"
+        url = f"{self._exports(scope)}/{self._seg(name)}/runHistory"
         return list((self._arm("GET", url, self._v.cost_management).body or {}).get("value") or [])
 
     def delete_export(self, name: str, *, scope: str | None = None) -> None:
-        self._arm("DELETE", f"{self._exports(scope)}/{name}", self._v.cost_management)
+        self._arm("DELETE", f"{self._exports(scope)}/{self._seg(name)}", self._v.cost_management)
 
     # --------------------------------------------------------- tag inheritance
     def set_tag_inheritance(self, enabled: bool = True, *, prefer_container_tags: bool = False,

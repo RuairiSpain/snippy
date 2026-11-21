@@ -7,15 +7,28 @@ from urllib.parse import quote
 
 
 def _seg(value: str) -> str:
-    return quote(value, safe="")
+    """Percent-encode one URL path segment so user input can't add or remove path levels."""
+    return quote(str(value), safe="")
+
+
+def segment(value: str | None, what: str = "name") -> str:
+    """Validate and encode a user-supplied resource name for use inside an ARM URL."""
+    if value is None or not str(value).strip():
+        raise ValueError(f"{what} is required")
+    return _seg(str(value).strip())
+
+
+def odata_quote(value: str) -> str:
+    """Escape a value for use inside an OData single-quoted string literal."""
+    return str(value).replace("'", "''")
 
 
 def subscription_scope(subscription_id: str) -> str:
-    return f"/subscriptions/{subscription_id}"
+    return f"/subscriptions/{_seg(subscription_id)}"
 
 
 def resource_group_scope(subscription_id: str, resource_group: str) -> str:
-    return f"/subscriptions/{subscription_id}/resourceGroups/{_seg(resource_group)}"
+    return f"{subscription_scope(subscription_id)}/resourceGroups/{_seg(resource_group)}"
 
 
 def foundry_account_id(subscription_id: str, resource_group: str, account: str) -> str:

@@ -4,7 +4,7 @@ from collections.abc import Iterator, Mapping
 from typing import Any
 
 from .._config import ApiVersions, AzureCloud
-from .._ids import resource_group_scope, subscription_scope
+from .._ids import resource_group_scope, segment, subscription_scope
 from .._transport import Response, Transport
 
 
@@ -30,6 +30,11 @@ class _Operations:
         return f"<{type(self).__name__} subscription={self._sub!r} resource_group={self._rg!r}>"
 
     # ------------------------------------------------------------------ scope
+    @staticmethod
+    def _seg(value: str | None, what: str = "name") -> str:
+        """Encode a user-supplied name as a single URL path segment."""
+        return segment(value, what)
+
     def _rg_or_default(self, resource_group: str | None) -> str:
         rg = resource_group or self._rg
         if not rg:
@@ -45,9 +50,21 @@ class _Operations:
 
     # ------------------------------------------------------------------- http
     def _url(self, path: str) -> str:
-        if path.startswith("http"):
+        """Build an ARM URL. Absolute URLs are only accepted for the cloud's own ARM host.
+
+        The bearer token is attached to every request, so a caller-supplied ``scope`` such as
+        ``https://evil.example`` must never be able to redirect it to another host.
+        """
+        base = self._cloud.resource_manager.rstrip("/")
+        if path.lower().startswith(("http://", "https://")):
+            if path != base and not path.startswith(base + "/"):
+                raise ValueError(f"Refusing to send Azure credentials to {path.split('?')[0]!r}")
             return path
-        return f"{self._cloud.resource_manager.rstrip('/')}/{path.lstrip('/')}"
+        if not path.startswith("/"):
+            path = "/" + path
+        if "?" in path or "#" in path or any(seg in ("..", ".") for seg in path.split("/")):
+            raise ValueError(f"Invalid resource path: {path!r}")
+        return f"{base}{path}"
 
     def _arm(
         self,

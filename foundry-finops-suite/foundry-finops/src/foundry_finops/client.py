@@ -82,7 +82,7 @@ class FinOpsClient:
         self.cloud = cloud
         self.api_versions = api_versions or ApiVersions()
         self._transport = Transport(
-            credential or default_credential(),
+            credential or default_credential(authority=cloud.authority),
             session=session or requests.Session(),
             retry=retry or RetryPolicy(),
             timeout=timeout,

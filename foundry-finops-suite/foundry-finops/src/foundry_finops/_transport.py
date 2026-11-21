@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import email.utils
 import json
 import logging
 import random
@@ -18,6 +19,7 @@ from .errors import (
     AuthenticationError,
     BudgetExceededError,
     ConflictError,
+    FinOpsError,
     ForbiddenError,
     HttpResponseError,
     NotFoundError,
@@ -30,6 +32,31 @@ logger = logging.getLogger("foundry_finops")
 
 _RETRY_STATUS = frozenset({408, 429, 500, 502, 503, 504})
 _IDEMPOTENT = frozenset({"GET", "HEAD", "PUT", "DELETE", "OPTIONS"})
+#: Cost Management reports its throttling windows in several ``x-ms-ratelimit-*`` headers.
+_RETRY_AFTER_HEADERS = (
+    "retry-after",
+    "x-ms-ratelimit-microsoft.costmanagement-entity-retry-after",
+    "x-ms-ratelimit-microsoft.costmanagement-tenant-retry-after",
+    "x-ms-ratelimit-microsoft.costmanagement-client-retry-after",
+    "x-ms-ratelimit-microsoft.costmanagement-qpu-retry-after",
+)
+_LRO_DONE = frozenset({"succeeded", "completed"})
+_LRO_FAILED = frozenset({"failed", "canceled", "cancelled"})
+
+
+def _parse_retry_after(value: str) -> float | None:
+    """``Retry-After`` is either delta-seconds or an HTTP date."""
+    try:
+        return max(0.0, float(value))
+    except (TypeError, ValueError):
+        pass
+    try:
+        when = email.utils.parsedate_to_datetime(value)
+    except (TypeError, ValueError):
+        return None
+    if when.tzinfo is None:
+        return None
+    return max(0.0, when.timestamp() - time.time())
 
 
 @dataclass
@@ -42,21 +69,20 @@ class RetryPolicy:
     retry_non_idempotent: bool = True  # ARM POST queries (Cost Management) are safe to retry
 
     def sleep_for(self, attempt: int, headers: Mapping[str, str]) -> float:
+        lower = {k.lower(): v for k, v in headers.items()}
         for name in ("retry-after-ms", "x-ms-retry-after-ms"):
-            if name in {k.lower() for k in headers}:
-                value = next(v for k, v in headers.items() if k.lower() == name)
+            if name in lower:
                 try:
-                    return min(float(value) / 1000.0, self.max_backoff)
+                    return max(0.0, min(float(lower[name]) / 1000.0, self.max_backoff))
                 except ValueError:
                     pass
-        for key, value in headers.items():
-            if key.lower() in ("retry-after", "x-ms-ratelimit-microsoft.costmanagement-qpu-retry-after"):
-                try:
-                    return min(float(value), self.max_backoff)
-                except ValueError:
-                    break
+        for name in _RETRY_AFTER_HEADERS:
+            if name in lower:
+                seconds = _parse_retry_after(lower[name])
+                if seconds is not None:
+                    return min(seconds, self.max_backoff)
         delay = self.backoff_factor * (2**attempt)
-        return min(delay + random.uniform(0, delay / 4), self.max_backoff)
+        return float(min(delay + random.uniform(0, delay / 4), self.max_backoff))
 
 
 @dataclass
@@ -120,9 +146,10 @@ class Transport:
             hdrs.update(headers)
 
         attempt = 0
+        refreshed = False
         while True:
             if authenticate:
-                hdrs["Authorization"] = self._tokens.bearer(scope)
+                hdrs["Authorization"] = self._bearer(scope, method, url)
             logger.debug("%s %s", method, url)
             try:
                 raw = self.session.request(
@@ -133,7 +160,7 @@ class Transport:
                     headers=hdrs,
                     timeout=self.timeout,
                 )
-            except (requests.ConnectionError, requests.Timeout) as exc:
+            except (requests.ConnectionError, requests.Timeout, requests.exceptions.ChunkedEncodingError) as exc:
                 if attempt < self.retry.total:
                     delay = self.retry.sleep_for(attempt, {})
                     logger.warning("Transport error %s; retrying in %.1fs", exc, delay)
@@ -145,6 +172,12 @@ class Transport:
             resp = _to_response(raw)
             if resp.status_code in expected:
                 return resp
+
+            # An access token can be revoked or rotated before its stated expiry: refresh once.
+            if resp.status_code == 401 and authenticate and not refreshed:
+                refreshed = True
+                self._tokens.invalidate(scope)
+                continue
 
             retryable = resp.status_code in _RETRY_STATUS and (
                 method in _IDEMPOTENT or self.retry.retry_non_idempotent
@@ -160,6 +193,16 @@ class Transport:
                 continue
             raise _to_error(resp, method, url)
 
+    def _bearer(self, scope: str, method: str, url: str) -> str:
+        try:
+            return self._tokens.bearer(scope)
+        except FinOpsError:
+            raise
+        except Exception as exc:  # azure.core ClientAuthenticationError, CredentialUnavailableError, ...
+            raise AuthenticationError(
+                f"Could not get an access token for {scope}: {exc}", status_code=401, method=method, url=url
+            ) from exc
+
     # --------------------------------------------------------------- helpers
     def paged(
         self,
@@ -173,10 +216,18 @@ class Transport:
         """Iterate every item across ``nextLink`` pages."""
         next_url: str | None = url
         next_params: Mapping[str, Any] | None = params
+        seen: set[str] = set()
         while next_url:
-            body = self.request("GET", next_url, scope=scope, params=next_params).body or {}
+            body = self.request("GET", next_url, scope=scope, params=next_params).body
+            if not isinstance(body, dict):
+                return
             yield from body.get(item_key, []) or []
             next_url = body.get(next_key) or body.get("@odata.nextLink") or body.get("NextPageLink")
+            if next_url in seen:  # a misbehaving service that repeats its own link must not hang us
+                logger.warning("Paging loop detected at %s; stopping", next_url)
+                return
+            if next_url:
+                seen.add(next_url)
             next_params = None  # nextLink already carries the query string
 
     def poll(self, resp: Response, *, scope: str, interval: float = 2.0, timeout: float = 600) -> Response:
@@ -184,22 +235,38 @@ class Transport:
         if resp.status_code not in (201, 202):
             return resp
         lower = {k.lower(): v for k, v in resp.headers.items()}
-        poll_url = lower.get("azure-asyncoperation") or lower.get("location")
+        async_url = lower.get("azure-asyncoperation")
+        poll_url = async_url or lower.get("location")
         if not poll_url:
             return resp
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            self.sleep(float(lower.get("retry-after", interval)))
+            wait = _parse_retry_after(lower.get("retry-after", "")) if lower.get("retry-after") else None
+            self.sleep(min(wait if wait is not None else interval, max(deadline - time.monotonic(), 0)))
             current = self.request("GET", poll_url, scope=scope)
-            status = (current.body or {}).get("status") if isinstance(current.body, dict) else None
-            if current.status_code == 200 and status in (None, "Succeeded", "Completed"):
-                return current
-            if status in ("Failed", "Canceled", "Cancelled"):
+            body = current.body if isinstance(current.body, dict) else {}
+            status = str(body.get("status") or "").lower()
+            if status in _LRO_FAILED:
                 raise HttpResponseError(
-                    f"Long-running operation {status}", status_code=current.status_code, body=current.body
+                    f"Long-running operation {body.get('status')}: {_lro_error(body)}",
+                    status_code=current.status_code,
+                    body=current.body,
                 )
+            if status in _LRO_DONE:
+                return current
+            # A ``Location`` poll has no status document: 200/204 means finished, 202 means keep going.
+            if current.status_code in (200, 204) and not status:
+                return current
             lower = {k.lower(): v for k, v in current.headers.items()}
+            poll_url = lower.get("azure-asyncoperation") or lower.get("location") or poll_url
         raise ServiceError("Long-running operation timed out", status_code=0)
+
+
+def _lro_error(body: Mapping[str, Any]) -> str:
+    err = body.get("error")
+    if isinstance(err, dict):
+        return str(err.get("message") or err.get("code") or "")
+    return ""
 
 
 def _to_response(raw: requests.Response) -> Response:

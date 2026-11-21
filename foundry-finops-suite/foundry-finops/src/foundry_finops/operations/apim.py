@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from typing import Any
 from xml.sax.saxutils import quoteattr
 
+from defusedxml import DefusedXmlException
 from defusedxml.ElementTree import fromstring as _safe_fromstring  # policy XML comes from the service
 
 from .._ids import apim_service_id
@@ -64,10 +65,15 @@ class LlmTokenLimit:
     @classmethod
     def from_element(cls, el: ET.Element) -> LlmTokenLimit:
         g = el.attrib.get
+
+        def num(name: str) -> int | None:  # policy expressions (``@(...)``) aren't plain numbers
+            value = g(name, "")
+            return int(value) if value.isdigit() else None
+
         return cls(
             counter_key=g("counter-key", ""),
-            tokens_per_minute=int(g("tokens-per-minute")) if g("tokens-per-minute", "").isdigit() else None,
-            token_quota=int(g("token-quota")) if g("token-quota", "").isdigit() else None,
+            tokens_per_minute=num("tokens-per-minute"),
+            token_quota=num("token-quota"),
             token_quota_period=g("token-quota-period"),
             estimate_prompt_tokens=g("estimate-prompt-tokens", "false").lower() == "true",
             remaining_tokens_header_name=g("remaining-tokens-header-name"),
@@ -100,6 +106,9 @@ class LlmEmitTokenMetric:
     )
 
     def to_xml(self) -> str:
+        for k, v in self.dimensions.items():
+            if v is None and k not in self.DEFAULT_DIMENSIONS:
+                raise ValueError(f"Custom dimension {k!r} needs a value expression")
         custom = [k for k, v in self.dimensions.items() if v is not None or k not in self.DEFAULT_DIMENSIONS]
         if len(custom) > 5:
             raise ValueError("APIM allows at most 5 custom dimensions per token-metric policy")
@@ -115,8 +124,8 @@ def upsert_policy_fragment(policy_xml: str | None, fragment: str, *, section: st
 
     Uses ElementTree, so comments are dropped; policy expressions in attributes are preserved.
     """
-    root = _safe_fromstring(policy_xml or EMPTY_POLICY)
-    new = _safe_fromstring(fragment)
+    root = _parse_xml(policy_xml or EMPTY_POLICY)
+    new = _parse_xml(fragment)
     sec = root.find(section)
     if sec is None:
         sec = ET.SubElement(root, section)
@@ -133,8 +142,17 @@ def upsert_policy_fragment(policy_xml: str | None, fragment: str, *, section: st
     return ET.tostring(root, encoding="unicode")
 
 
+def _parse_xml(xml: str) -> ET.Element:
+    """Parse policy XML safely; malformed or hostile XML becomes a ``ValueError``."""
+    try:
+        root: ET.Element = _safe_fromstring(xml)
+        return root
+    except (ET.ParseError, DefusedXmlException) as exc:
+        raise ValueError(f"Invalid policy XML: {exc}") from exc
+
+
 def remove_policy_element(policy_xml: str, tag_suffix: str) -> str:
-    root = _safe_fromstring(policy_xml)
+    root = _parse_xml(policy_xml)
     for sec in root:
         for el in list(sec):
             if el.tag.endswith(tag_suffix):
@@ -147,8 +165,8 @@ def find_token_limits(policy_xml: str | None) -> list[LlmTokenLimit]:
     if not policy_xml:
         return []
     try:
-        root = _safe_fromstring(policy_xml)
-    except ET.ParseError:
+        root = _parse_xml(policy_xml)
+    except ValueError:
         return []
     return [LlmTokenLimit.from_element(el) for el in root.iter() if re.search(r"token-limit$", el.tag)]
 
@@ -178,22 +196,22 @@ class ApimOperations(_Operations):
             yield ApimProduct.from_dict(d)
 
     def get_product(self, service: str, product_id: str, resource_group: str | None = None) -> ApimProduct:
-        url = f"{self.service_id(service, resource_group)}/products/{product_id}"
+        url = f"{self.service_id(service, resource_group)}/products/{self._seg(product_id)}"
         return ApimProduct.from_dict(self._arm("GET", url, self._v.api_management).body)
 
     def create_or_update_product(
         self, service: str, product: ApimProduct, *, api_ids: Sequence[str] = (), resource_group: str | None = None
     ) -> ApimProduct:
         """Create or update a product (e.g. one per team) and link it to APIs."""
-        url = f"{self.service_id(service, resource_group)}/products/{product.name}"
+        url = f"{self.service_id(service, resource_group)}/products/{self._seg(product.name)}"
         resp = self._arm("PUT", url, self._v.api_management, body=product.to_dict(), headers={"If-Match": "*"})
         for api_id in api_ids:
-            self._arm("PUT", f"{url}/apis/{api_id}", self._v.api_management)
+            self._arm("PUT", f"{url}/apis/{self._seg(api_id)}", self._v.api_management)
         return ApimProduct.from_dict(resp.body or {})
 
     def delete_product(self, service: str, product_id: str, *, delete_subscriptions: bool = True,
                        resource_group: str | None = None) -> None:
-        url = f"{self.service_id(service, resource_group)}/products/{product_id}"
+        url = f"{self.service_id(service, resource_group)}/products/{self._seg(product_id)}"
         self._arm("DELETE", url, self._v.api_management, params={"deleteSubscriptions": str(delete_subscriptions).lower()},
                   headers={"If-Match": "*"})
 
@@ -203,23 +221,35 @@ class ApimOperations(_Operations):
             yield ApimSubscription.from_dict(d)
 
     def get_subscription(self, service: str, sid: str, resource_group: str | None = None) -> ApimSubscription:
-        url = f"{self.service_id(service, resource_group)}/subscriptions/{sid}"
+        url = f"{self.service_id(service, resource_group)}/subscriptions/{self._seg(sid)}"
         return ApimSubscription.from_dict(self._arm("GET", url, self._v.api_management).body)
 
     def create_or_update_subscription(
         self, service: str, subscription: ApimSubscription, resource_group: str | None = None
     ) -> ApimSubscription:
-        url = f"{self.service_id(service, resource_group)}/subscriptions/{subscription.name}"
-        resp = self._arm("PUT", url, self._v.api_management, body=subscription.to_dict(), headers={"If-Match": "*"})
+        url = f"{self.service_id(service, resource_group)}/subscriptions/{self._seg(subscription.name)}"
+        body = subscription.to_dict()
+        body["properties"]["scope"] = self._full_scope(service, subscription.scope, resource_group)
+        resp = self._arm("PUT", url, self._v.api_management, body=body, headers={"If-Match": "*"})
         return ApimSubscription.from_dict(resp.body or {})
 
+    def _full_scope(self, service: str, scope: str, resource_group: str | None) -> str:
+        """APIM subscriptions need a full resource ID; accept ``/products/x``, ``/apis/x`` and ``/apis``."""
+        if not scope:
+            raise ValueError("subscription scope is required, e.g. '/products/<productId>' or '/apis'")
+        if scope.startswith("/subscriptions/"):
+            return scope
+        if scope == "/apis" or scope.startswith(("/products/", "/apis/")):
+            return f"{self.service_id(service, resource_group)}{scope}"
+        raise ValueError("subscription scope must be '/apis', '/apis/<id>' or '/products/<id>'")
+
     def delete_subscription(self, service: str, sid: str, resource_group: str | None = None) -> None:
-        url = f"{self.service_id(service, resource_group)}/subscriptions/{sid}"
+        url = f"{self.service_id(service, resource_group)}/subscriptions/{self._seg(sid)}"
         self._arm("DELETE", url, self._v.api_management, headers={"If-Match": "*"})
 
     def list_subscription_secrets(self, service: str, sid: str, resource_group: str | None = None) -> dict[str, str]:
         """Return primary/secondary keys. Treat as secrets – never log or persist them."""
-        url = f"{self.service_id(service, resource_group)}/subscriptions/{sid}/listSecrets"
+        url = f"{self.service_id(service, resource_group)}/subscriptions/{self._seg(sid)}/listSecrets"
         return dict(self._arm("POST", url, self._v.api_management).body or {})
 
     # -------------------------------------------------------------- policies
@@ -229,12 +259,12 @@ class ApimOperations(_Operations):
         if kind == "global":
             return f"{base}/policies/policy"
         if kind == "product":
-            return f"{base}/products/{ident}/policies/policy"
+            return f"{base}/products/{self._seg(ident)}/policies/policy"
         if kind == "api":
-            return f"{base}/apis/{ident}/policies/policy"
+            return f"{base}/apis/{self._seg(ident)}/policies/policy"
         if kind == "operation":
             api, _, op = ident.partition("/")
-            return f"{base}/apis/{api}/operations/{op}/policies/policy"
+            return f"{base}/apis/{self._seg(api)}/operations/{self._seg(op)}/policies/policy"
         raise ValueError("scope must be 'global', 'product:<id>', 'api:<id>' or 'operation:<api>/<op>'")
 
     def get_policy(self, service: str, scope: str = "global", resource_group: str | None = None) -> str | None:
@@ -247,7 +277,7 @@ class ApimOperations(_Operations):
         return ((resp.body or {}).get("properties") or {}).get("value")
 
     def set_policy(self, service: str, xml: str, scope: str = "global", resource_group: str | None = None) -> None:
-        _safe_fromstring(xml)  # fail fast on malformed XML
+        _parse_xml(xml)  # fail fast on malformed XML
         body = {"properties": {"format": "rawxml", "value": xml}}
         self._arm("PUT", self._policy_url(service, scope, resource_group), self._v.api_management,
                   body=body, headers={"If-Match": "*"})

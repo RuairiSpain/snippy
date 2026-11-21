@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import time
 from collections.abc import Iterator
 from typing import Any
 
 from .._ids import foundry_account_id, foundry_project_id
+from ..errors import HttpResponseError, ServiceError
 from ..models import Deployment, FoundryAccount, FoundryProject
 from ._base import _Operations
 
@@ -48,7 +50,7 @@ class FoundryOperations(_Operations):
             yield Deployment.from_dict(d)
 
     def get_deployment(self, account: str, deployment: str, resource_group: str | None = None) -> Deployment:
-        rid = f"{self.account_id(account, resource_group)}/deployments/{deployment}"
+        rid = f"{self.account_id(account, resource_group)}/deployments/{self._seg(deployment)}"
         return Deployment.from_dict(self._arm("GET", rid, self._v.cognitive_services).body)
 
     def create_or_update_deployment(
@@ -67,7 +69,7 @@ class FoundryOperations(_Operations):
         wait: bool = True,
     ) -> Deployment:
         """Create or replace a model deployment. ``capacity`` is in thousands of TPM for Standard SKUs."""
-        rid = f"{self.account_id(account, resource_group)}/deployments/{deployment}"
+        rid = f"{self.account_id(account, resource_group)}/deployments/{self._seg(deployment)}"
         model: dict[str, Any] = {"format": model_format, "name": model_name}
         if model_version:
             model["version"] = model_version
@@ -78,32 +80,62 @@ class FoundryOperations(_Operations):
         resp = self._arm("PUT", rid, self._v.cognitive_services, body=body)
         if wait:
             self._t.poll(resp, scope=self._cloud.arm_scope)
-            return self.get_deployment(account, deployment, resource_group)
+            return self._wait_provisioned(account, deployment, resource_group)
         return Deployment.from_dict(resp.body or {})
+
+    _IN_PROGRESS = frozenset({"creating", "updating", "accepted", "deleting", "running", "inprogress"})
+
+    def _wait_provisioned(
+        self, account: str, deployment: str, resource_group: str | None, timeout: float = 300.0
+    ) -> Deployment:
+        """Return the deployment once ``provisioningState`` is terminal.
+
+        The PUT may answer 200/201 without an async-operation header while the deployment is still
+        ``Creating``/``Updating``, so waiting only for the LRO headers can return a half-built resource.
+        """
+        deadline = time.monotonic() + timeout
+        while True:
+            dep = self.get_deployment(account, deployment, resource_group)
+            state = (dep.provisioning_state or "").lower()
+            if state not in self._IN_PROGRESS:
+                if state in ("failed", "canceled"):
+                    raise HttpResponseError(
+                        f"Deployment {deployment!r} ended in provisioning state {dep.provisioning_state}",
+                        status_code=200,
+                        body=dep.raw,
+                    )
+                return dep
+            if time.monotonic() >= deadline:
+                raise ServiceError(
+                    f"Timed out waiting for deployment {deployment!r} (state {dep.provisioning_state})",
+                    status_code=0,
+                )
+            self._t.sleep(3.0)
 
     def set_capacity(
         self, account: str, deployment: str, capacity: int, *, resource_group: str | None = None, wait: bool = True
     ) -> Deployment:
         """Change a deployment's capacity (TPM allocation) while keeping model, SKU and policy."""
-        rid = f"{self.account_id(account, resource_group)}/deployments/{deployment}"
+        rid = f"{self.account_id(account, resource_group)}/deployments/{self._seg(deployment)}"
+        if capacity < 1:
+            raise ValueError("capacity must be at least 1")
         current = self._arm("GET", rid, self._v.cognitive_services).body
+        if not isinstance(current, dict):
+            raise HttpResponseError(f"Deployment {deployment!r} returned an unexpected response", status_code=200)
+        keep = ("model", "raiPolicyName", "versionUpgradeOption", "parentDeploymentName")
         body = {
             "sku": {**(current.get("sku") or {}), "capacity": capacity},
-            "properties": {
-                k: v
-                for k, v in (current.get("properties") or {}).items()
-                if k in ("model", "raiPolicyName", "versionUpgradeOption", "currentCapacity", "parentDeploymentName")
-                and k != "currentCapacity"
-            },
+            "properties": {k: v for k, v in (current.get("properties") or {}).items() if k in keep},
             "tags": current.get("tags") or {},
         }
         resp = self._arm("PUT", rid, self._v.cognitive_services, body=body)
         if wait:
             self._t.poll(resp, scope=self._cloud.arm_scope)
+            return self._wait_provisioned(account, deployment, resource_group)
         return self.get_deployment(account, deployment, resource_group)
 
     def delete_deployment(self, account: str, deployment: str, resource_group: str | None = None) -> None:
-        rid = f"{self.account_id(account, resource_group)}/deployments/{deployment}"
+        rid = f"{self.account_id(account, resource_group)}/deployments/{self._seg(deployment)}"
         resp = self._arm("DELETE", rid, self._v.cognitive_services)
         self._t.poll(resp, scope=self._cloud.arm_scope)
 

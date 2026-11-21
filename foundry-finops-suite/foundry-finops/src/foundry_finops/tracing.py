@@ -30,7 +30,8 @@ from .operations.pricing import PriceSheet
 
 logger = logging.getLogger("foundry_finops.usage")
 
-_ATTRS: contextvars.ContextVar[dict[str, str]] = contextvars.ContextVar("finops_attrs", default={})
+_ATTRS: contextvars.ContextVar[dict[str, str]] = contextvars.ContextVar("finops_attrs", default={})  # noqa: B039
+_configured = False
 
 #: Attribute prefix used on spans, metrics and log records.
 PREFIX = "finops."
@@ -49,6 +50,10 @@ def configure_tracing(
     string of the project's connected Application Insights resource. Content recording stays
     off by default (prompts can contain personal or confidential data).
     """
+    global _configured
+    if _configured:  # configure_azure_monitor installs global providers; calling it twice duplicates exports
+        logger.debug("Tracing already configured; ignoring repeated call")
+        return
     try:
         from azure.monitor.opentelemetry import configure_azure_monitor
     except ImportError as exc:
@@ -62,6 +67,7 @@ def configure_tracing(
 
     os.environ.setdefault("OTEL_SERVICE_NAME", service_name)
     configure_azure_monitor(connection_string=connection_string, logger_name="foundry_finops")
+    _configured = True
 
     os.environ["AZURE_EXPERIMENTAL_ENABLE_GENAI_TRACING"] = "true"
     try:
@@ -99,7 +105,10 @@ def finops_context(**attributes: str) -> Iterator[dict[str, str]]:
         if otel_token is not None:
             from opentelemetry import context
 
-            context.detach(otel_token)
+            try:
+                context.detach(otel_token)
+            except Exception:
+                logger.debug("Could not detach OpenTelemetry context", exc_info=True)
         _ATTRS.reset(token)
 
 
@@ -201,7 +210,7 @@ class UsageTracker:
                 span.set_attribute("gen_ai.usage.output_tokens", rec.output_tokens)
                 if rec.cost is not None:
                     span.set_attribute(PREFIX + "cost", rec.cost)
-        payload = asdict(rec)
+        payload = {k: v for k, v in asdict(rec).items() if v is not None}  # OpenTelemetry rejects None values
         payload.pop("attributes")
         payload.update({PREFIX + k: v for k, v in rec.attributes.items()})
         payload["total_tokens"] = rec.total_tokens
