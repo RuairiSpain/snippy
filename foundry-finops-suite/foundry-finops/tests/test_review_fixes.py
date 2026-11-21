@@ -23,7 +23,7 @@ from foundry_finops.operations.apim import (
     find_token_limits,
     upsert_policy_fragment,
 )
-from foundry_finops.service import DemoService, _with_status
+from foundry_finops.service import DemoService, Settings, _with_status, window_start
 
 from .fakes import FakeSession, make_client
 
@@ -210,3 +210,114 @@ class CliTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MultiThresholdTests(unittest.TestCase):
+    def test_round_trip_keeps_every_alert_and_block(self):
+        from foundry_finops import Threshold
+
+        conn = "/subscriptions/s/resourceGroups/rg/providers/Microsoft.CognitiveServices/accounts/a/connections/eg"
+        cc = CostControl(name="cap", amount=1000, alert=Threshold(50, event_grid_connection_id=conn),
+                         extra_alerts=[Threshold(80, event_grid_connection_id=conn)],
+                         block=Threshold(100))
+        body = cc.to_dict()
+        self.assertEqual(len(body["properties"]["notifications"]), 2)
+        back = CostControl.from_dict({"name": "cap", "properties": body["properties"]})
+        self.assertEqual([t.threshold for t in back.alerts], [50, 80])
+        self.assertEqual(back.to_dict()["properties"]["notifications"], body["properties"]["notifications"])
+
+    def test_validation_covers_extra_thresholds(self):
+        from foundry_finops import Threshold
+
+        conn = "x"
+        with self.assertRaisesRegex(ValueError, "at or below"):
+            CostControl(name="c", amount=10, alert=Threshold(50, event_grid_connection_id=conn),
+                        extra_alerts=[Threshold(95, event_grid_connection_id=conn)], block=Threshold(90)).to_dict()
+        with self.assertRaisesRegex(ValueError, "unique"):
+            CostControl(name="c", amount=10, alert=Threshold(50, event_grid_connection_id=conn),
+                        extra_alerts=[Threshold(50, event_grid_connection_id=conn)]).to_dict()
+
+    def test_status_uses_the_lowest_threshold(self):
+        row = {"amount": 100, "usage": 55, "alerts": [{"threshold": 50}, {"threshold": 80}],
+               "blocks": [{"threshold": 100}]}
+        self.assertEqual(_with_status(row)["state"], "Near threshold")
+
+
+class UsageEstimateTests(unittest.TestCase):
+    ACCT = "/subscriptions/sub-1/resourceGroups/rg/providers/Microsoft.CognitiveServices/accounts/acct"
+
+    def _service(self, cost_controls):
+        from foundry_finops.service import LiveService
+
+        s = FakeSession()
+        s.add("GET", "/costControls", 200, {"value": cost_controls})
+        s.add("GET", "/projects", 200, {"value": []})
+        client = make_client(s)
+        return LiveService(Settings(subscription_id="sub-1", resource_group="rg", foundry_account="acct"), client), s
+
+    def test_window_start(self):
+        now = datetime(2026, 3, 18, 15, 30, tzinfo=timezone.utc)
+        cc = CostControl(name="c", amount=1, time_grain=TimeGrain.DAILY)
+        self.assertEqual(window_start(cc, now), datetime(2026, 3, 18, tzinfo=timezone.utc))
+        cc = CostControl(name="c", amount=1, time_grain=TimeGrain.MONTHLY)
+        self.assertEqual(window_start(cc, now), datetime(2026, 3, 1, tzinfo=timezone.utc))
+        cc = CostControl(name="c", amount=1, time_grain=TimeGrain.MONTHLY, start_date="2026-01-20T00:00:00Z")
+        self.assertEqual(window_start(cc, now), datetime(2026, 2, 20, tzinfo=timezone.utc))
+        cc = CostControl(name="c", amount=1, time_grain=TimeGrain.MONTHLY, start_date="2026-01-31T00:00:00Z")
+        self.assertEqual(window_start(CostControl(name="c", amount=1, start_date=cc.start_date),
+                                      datetime(2026, 2, 28, 1, tzinfo=timezone.utc)),
+                         datetime(2026, 2, 28, tzinfo=timezone.utc))  # clamps to the last day of a short month
+        cc = CostControl(name="c", amount=1, time_grain=TimeGrain.WEEKLY, start_date="2026-03-02T00:00:00Z")
+        self.assertEqual(window_start(cc, now), datetime(2026, 3, 16, tzinfo=timezone.utc))
+
+    def test_cost_budget_usage_comes_from_billed_cost(self):
+        svc, s = self._service([{"id": self.ACCT + "/costControls/cap", "name": "cap", "properties": {
+            "category": "Cost", "amount": 100, "timeGrain": "Monthly",
+            "filter": {"additionalInfo": {"name": "project", "operator": "In", "values": ["risk"]}},
+            "providerProperties": {"actions": {"b": {"type": "Block", "threshold": 80, "thresholdType": "Percentage"}}}}}])
+        s.add("POST", "/providers/Microsoft.CostManagement/query", 200, {"properties": {
+            "columns": [{"name": "Cost", "type": "Number"}, {"name": "Currency", "type": "String"}],
+            "rows": [[85.5, "USD"]]}})
+        [row] = svc.list_cost_controls()
+        self.assertEqual(row["usage"], 85.5)
+        self.assertEqual(row["state"], "Limit reached")
+        query = [c for c in s.calls if c["method"] == "POST"][-1]
+        self.assertTrue(query["url"].startswith("https://management.azure.com" + self.ACCT))
+        self.assertEqual(query["json"]["dataset"]["filter"]["tags"], {"name": "project", "operator": "In", "values": ["risk"]})
+
+    def test_token_budget_usage_comes_from_metrics(self):
+        svc, s = self._service([{"id": self.ACCT + "/costControls/tok", "name": "tok", "properties": {
+            "category": "Tokens", "amount": 1000, "timeGrain": "Daily",
+            "filter": {"additionalInfo": {"name": "deployment", "operator": "In", "values": ["gpt"]}}}}])
+        s.add("GET", "/providers/Microsoft.Insights/metrics", 200, {"value": [{
+            "name": {"value": "TokenTransaction"}, "unit": "Count",
+            "timeseries": [{"data": [{"timeStamp": "t1", "total": 300}, {"timeStamp": "t2", "total": 250}]}]}]})
+        [row] = svc.list_cost_controls()
+        self.assertEqual(row["usage"], 550)
+        self.assertEqual(row["percent_used"], 55.0)
+        metrics = next(c for c in s.calls if "/providers/Microsoft.Insights/metrics" in c["url"])
+        self.assertEqual(metrics["params"]["$filter"], "ModelDeploymentName eq 'gpt'")
+
+    def test_unreproducible_budgets_stay_unknown_with_a_reason(self):
+        svc, _ = self._service([{"id": self.ACCT + "/costControls/s", "name": "s", "properties": {
+            "category": "Cost", "amount": 10, "timeGrain": "Daily",
+            "filter": {"additionalInfo": {"name": "sessionId", "operator": "In", "values": ["a"]}}}}])
+        [row] = svc.list_cost_controls()
+        self.assertIsNone(row["usage"])
+        self.assertIn("session", row["usage_note"].lower())
+        self.assertEqual(row["state"], "Usage unknown")
+
+    def test_a_failing_lookup_does_not_break_the_listing(self):
+        svc, _ = self._service([{"id": self.ACCT + "/costControls/cap", "name": "cap", "properties": {
+            "category": "Cost", "amount": 100, "timeGrain": "Monthly"}}])
+        # no fake route for the Cost Management query -> 404
+        [row] = svc.list_cost_controls()
+        self.assertIsNone(row["usage"])
+        self.assertIn("failed", row["usage_note"])
+
+    def test_live_upsert_round_trips(self):
+        svc, s = self._service([])
+        s.add("PUT", "/costControls/cap", 200, {"name": "cap", "properties": {"category": "Cost", "amount": 5,
+                                                                              "timeGrain": "Monthly"}})
+        out = svc.upsert_cost_control({"name": "cap", "amount": 5})
+        self.assertEqual(out["name"], "cap")

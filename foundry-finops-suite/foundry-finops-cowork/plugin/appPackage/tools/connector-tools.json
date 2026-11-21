@@ -231,9 +231,19 @@
             "minimum": 1,
             "maximum": 100
           },
+          "alert_thresholds_pct": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "minimum": 1,
+              "maximum": 100
+            },
+            "maxItems": 5,
+            "description": "Several alert thresholds, e.g. [50, 80, 95]."
+          },
           "event_grid_connection_id": {
             "type": "string",
-            "description": "Foundry connection resource ID for alerts."
+            "description": "Foundry connection resource ID for alerts. Omit to reuse the one an existing cost control already uses."
           },
           "block_threshold_pct": {
             "type": "number",

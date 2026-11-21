@@ -43,6 +43,14 @@ class ToolArgumentTests(unittest.TestCase):
                 self.assertTrue(res["isError"])
                 self.assertIn(expect, res["content"][0]["text"])
 
+    def test_several_alert_thresholds(self):
+        res = call(self.url, "upsert_cost_control", {
+            "name": "multi", "amount": 100, "event_grid_connection_id": "conn",
+            "alert_thresholds_pct": [80, 50], "alert_threshold_pct": 50, "block_threshold_pct": 100})
+        self.assertFalse(res["isError"], res)
+        row = json.loads(res["content"][0]["text"])
+        self.assertEqual([a["threshold"] for a in row["alerts"]], [50, 80])
+
     def test_non_object_messages_get_json_rpc_errors(self):
         r = requests.post(self.url, json=[1, "x"], timeout=10)
         self.assertEqual(r.status_code, 200)

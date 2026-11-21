@@ -269,7 +269,28 @@ class ApimTests(unittest.TestCase):
         fo.apim.set_token_limit("gw", LlmTokenLimit(tokens_per_minute=100), "product:team-a")
         put = s.calls[-1]
         self.assertEqual(put["json"]["properties"]["format"], "rawxml")
-        self.assertEqual(put["headers"]["If-Match"], "*")
+        self.assertNotIn("If-Match", put["headers"])  # creating: nothing to match against
+
+    def test_policy_update_uses_the_etag_it_read(self):
+        s = FakeSession()
+        fo = make_client(s)
+        xml = "<policies><inbound><base /></inbound></policies>"
+        s.add("GET", "/products/team-a/policies/policy", 200, {"properties": {"value": xml}}, {"ETag": '"abc"'})
+        s.add("PUT", "/products/team-a/policies/policy", 200, {})
+        fo.apim.set_token_limit("gw", LlmTokenLimit(tokens_per_minute=100), "product:team-a")
+        self.assertEqual(s.calls[-1]["headers"]["If-Match"], '"abc"')
+        self.assertEqual(len([c for c in s.calls if c["method"] == "GET"]), 1)  # no second lookup
+
+    def test_concurrent_policy_change_is_a_conflict_not_an_overwrite(self):
+        from foundry_finops import ConflictError
+
+        s = FakeSession()
+        fo = make_client(s)
+        s.add("GET", "/policies/policy", 200, {"properties": {"value": "<policies><inbound><base /></inbound></policies>"}},
+              {"ETag": '"old"'})
+        s.add("PUT", "/policies/policy", 412, {"error": {"code": "PreconditionFailed", "message": "etag"}})
+        with self.assertRaises(ConflictError):
+            fo.apim.set_token_limit("gw", LlmTokenLimit(tokens_per_minute=1), "global")
 
 
 class PricingAndTracingTests(unittest.TestCase):

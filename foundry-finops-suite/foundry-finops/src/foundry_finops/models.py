@@ -238,8 +238,20 @@ class CostControl(ArmResource):
     sharing: BudgetSharing = BudgetSharing.SHARED
     alert: Threshold | None = None
     block: Threshold | None = None
+    #: Further ``Send alert`` / ``Block usage`` thresholds (e.g. alerts at 50 % and 80 %). Kept so that
+    #: reading a cost control and writing it back never silently drops thresholds.
+    extra_alerts: list[Threshold] = field(default_factory=list)
+    extra_blocks: list[Threshold] = field(default_factory=list)
     #: Owner scope – populated from the ID: ``account`` or ``project``.
     project: str | None = None
+
+    @property
+    def alerts(self) -> list[Threshold]:
+        return ([self.alert] if self.alert else []) + list(self.extra_alerts)
+
+    @property
+    def blocks(self) -> list[Threshold]:
+        return ([self.block] if self.block else []) + list(self.extra_blocks)
 
     # ------------------------------------------------------------- validation
     def validate(self) -> None:
@@ -261,15 +273,22 @@ class CostControl(ArmResource):
             raise ValueError("A session filter accepts up to 20 session IDs")
         if self.project and self.sharing == BudgetSharing.PER_PROJECT:
             raise ValueError("Only a Foundry resource's cost controls can use a per-project budget")
-        for t in (self.alert, self.block):
-            if t and t.threshold_type == ThresholdType.PERCENTAGE and not 0 < t.threshold <= 100:
+        for t in (*self.alerts, *self.blocks):
+            if t.threshold_type == ThresholdType.PERCENTAGE and not 0 < t.threshold <= 100:
                 raise ValueError("Percentage thresholds must be between 0 and 100")
-            if t and t.threshold_type == ThresholdType.ABSOLUTE and t.threshold > self.amount:
-                raise ValueError("Absolute thresholds can't exceed the amount")
-        if self.alert and not self.alert.event_grid_connection_id:
-            raise ValueError("An alert threshold needs event_grid_connection_id")
-        if self.alert and self.block and _pct(self.alert, self.amount) > _pct(self.block, self.amount):
-            raise ValueError("The alert threshold must be at or below the block threshold")
+            if t.threshold_type == ThresholdType.ABSOLUTE and not 0 < t.threshold <= self.amount:
+                raise ValueError("Absolute thresholds must be positive and can't exceed the amount")
+        for a in self.alerts:
+            if not a.event_grid_connection_id:
+                raise ValueError("An alert threshold needs event_grid_connection_id")
+        for label, items in (("alert", self.alerts), ("block", self.blocks)):
+            names = [t._default_name(label) for t in items]
+            if len(set(names)) != len(names):
+                raise ValueError(f"Two {label} thresholds have the same name/value; each must be unique")
+        if self.alerts and self.blocks and (
+            max(_pct(a, self.amount) for a in self.alerts) > min(_pct(b, self.amount) for b in self.blocks)
+        ):
+            raise ValueError("Alert thresholds must be at or below the block threshold")
 
     # ---------------------------------------------------------------- mapping
     def to_dict(self) -> dict[str, Any]:
@@ -296,25 +315,27 @@ class CostControl(ArmResource):
             props["filter"] = {"and": conditions}
         if self.sharing != BudgetSharing.SHARED:
             props["grouping"] = [{"name": str(self.sharing), "type": "AdditionalInfoKey"}]
-        if self.alert:
+        if self.alerts:
             props["notifications"] = {
-                self.alert._default_name("alert"): {
-                    "enabled": self.alert.enabled,
+                a._default_name("alert"): {
+                    "enabled": a.enabled,
                     "operator": "GreaterThanOrEqualTo",
-                    "threshold": self.alert.threshold,
-                    "thresholdType": str(self.alert.threshold_type),
-                    "eventGridConnectionId": self.alert.event_grid_connection_id,
+                    "threshold": a.threshold,
+                    "thresholdType": str(a.threshold_type),
+                    "eventGridConnectionId": a.event_grid_connection_id,
                 }
+                for a in self.alerts
             }
-        if self.block:
+        if self.blocks:
             props["providerProperties"] = {
                 "actions": {
-                    self.block._default_name("block"): {
+                    b._default_name("block"): {
                         "type": "Block",
                         "operator": "GreaterThanOrEqualTo",
-                        "threshold": self.block.threshold,
-                        "thresholdType": str(self.block.threshold_type),
+                        "threshold": b.threshold,
+                        "thresholdType": str(b.threshold_type),
                     }
+                    for b in self.blocks
                 }
             }
         return {"properties": props}
@@ -329,21 +350,20 @@ class CostControl(ArmResource):
             if info.get("name"):
                 filters[info["name"]] = list(info.get("values") or [])
         grouping = (p.get("grouping") or [{}])[0].get("name")
-        alert = block = None
+        alerts: list[Threshold] = []
+        blocks: list[Threshold] = []
         for key, n in (p.get("notifications") or {}).items():
-            alert = Threshold(
+            alerts.append(Threshold(
                 float(n.get("threshold", 0)),
                 _enum(ThresholdType, n.get("thresholdType"), ThresholdType.PERCENTAGE),
                 key,
                 n.get("eventGridConnectionId"),
                 bool(n.get("enabled", True)),
-            )
-            break
+            ))
         for key, a in ((p.get("providerProperties") or {}).get("actions") or {}).items():
-            block = Threshold(
+            blocks.append(Threshold(
                 float(a.get("threshold", 0)), _enum(ThresholdType, a.get("thresholdType"), ThresholdType.PERCENTAGE), key
-            )
-            break
+            ))
         tp = p.get("timePeriod") or {}
         rid = d.get("id") or ""
         project = None
@@ -361,8 +381,10 @@ class CostControl(ArmResource):
             end_date=tp.get("endDate"),
             filters=filters,
             sharing=_enum(BudgetSharing, grouping, BudgetSharing.SHARED),
-            alert=alert,
-            block=block,
+            alert=alerts[0] if alerts else None,
+            block=blocks[0] if blocks else None,
+            extra_alerts=alerts[1:],
+            extra_blocks=blocks[1:],
             project=project,
         )
 

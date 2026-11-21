@@ -18,6 +18,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Protocol
 
 from . import queries
+from ._ids import odata_quote
 from .models import (
     Budget,
     BudgetCategory,
@@ -95,6 +96,9 @@ def cost_control_from_payload(p: dict[str, Any]) -> CostControl:
 
     filters = {k: [v for v in (vals if isinstance(vals, list) else str(vals).split(",")) if str(v).strip()]
                for k, vals in (p.get("filters") or {}).items()}
+    # Either the single `alert`/`block` form (UI, MCP tool) or `alerts`/`blocks` lists for several thresholds.
+    alerts = [t for t in (thr(x) for x in (p.get("alerts") or [])) if t] or [t for t in [thr(p.get("alert"))] if t]
+    blocks = [t for t in (thr(x) for x in (p.get("blocks") or [])) if t] or [t for t in [thr(p.get("block"))] if t]
     return CostControl(
         name=p["name"],
         category=BudgetCategory(p.get("category") or "Cost"),
@@ -104,20 +108,31 @@ def cost_control_from_payload(p: dict[str, Any]) -> CostControl:
         end_date=p.get("end_date") or None,
         filters={k: [s.strip() for s in v] for k, v in filters.items() if v},
         sharing=BudgetSharing(p.get("sharing") or "shared"),
-        alert=thr(p.get("alert")),
-        block=thr(p.get("block")),
+        alert=alerts[0] if alerts else None,
+        block=blocks[0] if blocks else None,
+        extra_alerts=alerts[1:],
+        extra_blocks=blocks[1:],
         project=p.get("project") or None,
     )
 
 
-def cost_control_to_payload(cc: CostControl, usage: float | None = None) -> dict[str, Any]:
+def _threshold_payload(t: Threshold) -> dict[str, Any]:
+    return {"threshold": t.threshold, "threshold_type": str(t.threshold_type),
+            "event_grid_connection_id": t.event_grid_connection_id}
+
+
+def cost_control_to_payload(cc: CostControl, usage: float | None = None, usage_note: str | None = None) -> dict[str, Any]:
     d = cc.to_json()
     d.update(category=str(cc.category), time_grain=str(cc.time_grain), sharing=str(cc.sharing))
-    for k in ("alert", "block"):
-        t = getattr(cc, k)
-        d[k] = None if t is None else {"threshold": t.threshold, "threshold_type": str(t.threshold_type),
-                                       "event_grid_connection_id": t.event_grid_connection_id}
+    d["alert"] = _threshold_payload(cc.alert) if cc.alert else None
+    d["block"] = _threshold_payload(cc.block) if cc.block else None
+    d["alerts"] = [_threshold_payload(t) for t in cc.alerts]
+    d["blocks"] = [_threshold_payload(t) for t in cc.blocks]
+    d.pop("extra_alerts", None)
+    d.pop("extra_blocks", None)
     d["usage"] = usage
+    if usage_note:
+        d["usage_note"] = usage_note
     return d
 
 
@@ -147,8 +162,11 @@ def _with_status(row: dict[str, Any]) -> dict[str, Any]:
         value = float(t["threshold"])
         return value / amount * 100 if str(t.get("threshold_type")) == "Absolute" else value
 
-    alert = as_pct(row.get("alert")) or 80
-    block = as_pct(row.get("block"))
+    # With several thresholds the lowest alert and the lowest block are the ones usage reaches first.
+    alert_pcts = [p for p in (as_pct(t) for t in row.get("alerts") or [row.get("alert")]) if p]
+    block_pcts = [p for p in (as_pct(t) for t in row.get("blocks") or [row.get("block")]) if p]
+    alert = min(alert_pcts, default=80)
+    block = min(block_pcts, default=None)
     row["percent_used"] = round(pct, 1)
     row["state"] = ("Limit reached" if block and pct >= block else "Over budget" if pct >= 100
                     else "Near threshold" if pct >= alert else "On track")
@@ -163,7 +181,7 @@ class FinOpsService(Protocol):
     def overview(self, days: int = 30) -> dict[str, Any]: ...
     def cost_series(self, group_by: str = "project", days: int = 30) -> dict[str, Any]: ...
     def token_series(self, group_by: str = "deployment", hours: int = 168) -> dict[str, Any]: ...
-    def list_cost_controls(self) -> list[dict[str, Any]]: ...
+    def list_cost_controls(self, estimate_usage: bool = True) -> list[dict[str, Any]]: ...
     def upsert_cost_control(self, payload: dict[str, Any]) -> dict[str, Any]: ...
     def delete_cost_control(self, name: str, project: str | None = None) -> None: ...
     def list_budgets(self) -> list[dict[str, Any]]: ...
@@ -277,7 +295,7 @@ class DemoService(_Base):
         return Table.from_records(recs, "Tokens").to_json()
 
     # ---- cost controls
-    def list_cost_controls(self) -> list[dict[str, Any]]:
+    def list_cost_controls(self, estimate_usage: bool = True) -> list[dict[str, Any]]:
         return [_with_status(dict(c)) for c in self.store.cost_controls]
 
     def upsert_cost_control(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -623,12 +641,93 @@ class LiveService(_Base):
         return Table.from_records(recs, "Tokens").to_json()
 
     # ---- cost controls
-    def list_cost_controls(self) -> list[dict[str, Any]]:
-        return [_with_status(cost_control_to_payload(cc)) for cc in self.fo.cost_controls.list_all(self._acct)]
+    def list_cost_controls(self, estimate_usage: bool = True) -> list[dict[str, Any]]:
+        """Cost controls with an *estimated* usage per reset window.
+
+        Foundry exposes no usage API for cost controls, so usage is rebuilt from the same sources the
+        service meters on: billed cost from Cost Management for Cost budgets (8-24 h behind real
+        time) and Azure Monitor token metrics for Tokens budgets. Combinations that can't be
+        reproduced faithfully (per-session sharing, project/agent token budgets) stay "Usage unknown".
+        """
+        rows = []
+        cache: dict[Any, tuple[float | None, str | None]] = {}
+        now = datetime.now(timezone.utc)
+        for cc in self.fo.cost_controls.list_all(self._acct):
+            usage, note = self._estimate_usage(cc, now, cache) if estimate_usage else (None, None)
+            rows.append(_with_status(cost_control_to_payload(cc, usage, note)))
+        return rows
+
+    def _estimate_usage(
+        self, cc: CostControl, now: datetime, cache: dict[Any, tuple[float | None, str | None]]
+    ) -> tuple[float | None, str | None]:
+        key = (cc.category, cc.time_grain, cc.start_date, cc.project, cc.sharing,
+               tuple(sorted((k, tuple(v)) for k, v in cc.filters.items())))
+        if key not in cache:
+            try:
+                cache[key] = self._usage_for(cc, now)
+            except Exception as exc:
+                logger.warning("Could not estimate usage for cost control %s: %s", cc.name, _describe(exc))
+                cache[key] = (None, f"Usage lookup failed: {_describe(exc)}")
+        return cache[key]
+
+    def _usage_for(self, cc: CostControl, now: datetime) -> tuple[float | None, str | None]:
+        start = window_start(cc, now)
+        if "sessionId" in cc.filters or cc.sharing == BudgetSharing.PER_SESSION:
+            return None, "Per-session budgets can't be reconstructed from billing or metrics data."
+        if cc.category == BudgetCategory.TOKENS:
+            return self._token_usage(cc, start, now)
+        q = CostQuery.between(start, now).total()
+        tags = {"project": "project", "deployment": "deployment", "agent": "agent.name"}
+        filters = dict(cc.filters)
+        if cc.project and "project" not in filters:
+            filters["project"] = [cc.project]
+        for name, values in filters.items():
+            if name not in tags:
+                return None, f"Filter {name!r} can't be matched against billing data."
+            q.where_tag(tags[name], values)
+        group = {BudgetSharing.PER_AGENT: "agent.name", BudgetSharing.PER_PROJECT: "project"}.get(cc.sharing)
+        if group:
+            q.group_by_tag(group)
+        rows = list(self.fo.cost.query(q, scope=self._account_id))
+        if group:  # a per-agent/per-project budget applies to each group; the fullest one decides the state
+            per_group: dict[str, float] = defaultdict(float)
+            for r in rows:
+                per_group[str(r.get("TagValue") or "(untagged)")] += float(r.get("Cost") or r.get("PreTaxCost") or 0)
+            usage = max(per_group.values(), default=0.0)
+            note = f"Highest {group} in the current window, from billed cost (8-24 h lag)."
+        else:
+            usage = _sum_cost(rows)
+            note = "Billed cost in the current window (8-24 h lag), so recent usage isn't included yet."
+        return round(usage, 4), note
+
+    def _token_usage(self, cc: CostControl, start: datetime, now: datetime) -> tuple[float | None, str | None]:
+        if set(cc.filters) - {"deployment", "tokenType"} or cc.project or cc.sharing != BudgetSharing.SHARED:
+            return None, "Azure Monitor token metrics can only be narrowed by deployment and token type."
+        kinds = cc.filters.get("tokenType") or []
+        names = {"input": "ProcessedPromptTokens", "output": "GeneratedTokens"}
+        metrics = [names[k] for k in kinds if k in names] or ["TokenTransaction"]
+        deployments = cc.filters.get("deployment") or []
+        flt = " or ".join(f"ModelDeploymentName eq '{odata_quote(d)}'" for d in deployments) or None
+        interval = "PT1H" if (now - start).total_seconds() <= 2 * 86400 else "P1D"
+        series = self.fo.metrics.query(
+            self._account_id, metrics, start=start, end=now, interval=interval, split_by=(), filter=flt,
+        )
+        return float(sum(s.total for s in series)), "Azure Monitor token count in the current window."
 
     def upsert_cost_control(self, payload: dict[str, Any]) -> dict[str, Any]:
         self._guard()
         cc = cost_control_from_payload(payload)
+        if any(not a.event_grid_connection_id for a in cc.alerts):
+            # Foundry silently skips alerts that use a connection you made yourself, and the portal creates
+            # the right one on first save, so reuse the one an existing cost control already points at.
+            conn = self.fo.cost_controls.find_event_grid_connection_id(self._acct)
+            if not conn:
+                raise ValueError(
+                    "Alerts need an Event Grid connection. Save one alert in the Foundry portal first (it creates "
+                    "the connection), or pass event_grid_connection_id."
+                )
+            for a in cc.alerts:
+                a.event_grid_connection_id = a.event_grid_connection_id or conn
         out = self.fo.cost_controls.create_or_update(self._acct, cc, project=cc.project)
         return _with_status(cost_control_to_payload(out))
 
@@ -781,6 +880,39 @@ class LiveService(_Base):
             tail = low.split("| render")[-1].split()
             render = tail[0] if tail else None
         return {"columns": [{"name": c.name, "type": c.type} for c in t.columns], "rows": t.rows, "render": render}
+
+
+def window_start(cc: CostControl, now: datetime) -> datetime:
+    """Start (UTC) of the reset window containing ``now``.
+
+    Daily resets at 00:00 UTC; Weekly every 7 days and Monthly on the day of month of ``start_date``
+    (first of the month when none is set).
+    """
+    today = now.astimezone(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    anchor = None
+    if cc.start_date:
+        try:
+            anchor = datetime.fromisoformat(cc.start_date.replace("Z", "+00:00")).astimezone(timezone.utc)
+            anchor = anchor.replace(hour=0, minute=0, second=0, microsecond=0)
+        except ValueError:
+            anchor = None
+    if cc.time_grain == TimeGrain.DAILY:
+        return today
+    if cc.time_grain == TimeGrain.WEEKLY:
+        if anchor is None or anchor > today:
+            return today - timedelta(days=today.weekday())
+        return anchor + timedelta(days=((today - anchor).days // 7) * 7)
+    import calendar
+
+    def on_day(year: int, month: int) -> datetime:
+        day = min(anchor.day if anchor else 1, calendar.monthrange(year, month)[1])
+        return today.replace(year=year, month=month, day=day)
+
+    candidate = on_day(today.year, today.month)
+    if candidate > today:
+        year, month = (today.year - 1, 12) if today.month == 1 else (today.year, today.month - 1)
+        candidate = on_day(year, month)
+    return candidate
 
 
 def _describe(exc: BaseException) -> str:

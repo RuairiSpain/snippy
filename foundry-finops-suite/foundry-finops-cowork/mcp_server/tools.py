@@ -126,13 +126,15 @@ TOOLS: list[Tool] = [
                       "additionalProperties": {"type": "array", "items": {"type": "string"}}},
           "sharing": {"type": "string", "enum": ["shared", "agent", "sessionId", "project"], "default": "shared"},
           "alert_threshold_pct": {"type": "number", "minimum": 1, "maximum": 100},
-          "event_grid_connection_id": {"type": "string", "description": "Foundry connection resource ID for alerts."},
+          "alert_thresholds_pct": {"type": "array", "items": {"type": "number", "minimum": 1, "maximum": 100},
+                                   "maxItems": 5, "description": "Several alert thresholds, e.g. [50, 80, 95]."},
+          "event_grid_connection_id": {"type": "string", "description": "Foundry connection resource ID for alerts. Omit to reuse the one an existing cost control already uses."},
           "block_threshold_pct": {"type": "number", "minimum": 1, "maximum": 100}},
          lambda s, a: s.upsert_cost_control({
              **{k: a.get(k) for k in ("name", "project", "category", "amount", "time_grain", "start_date", "end_date",
                                       "filters", "sharing")},
-             "alert": {"threshold": a["alert_threshold_pct"], "event_grid_connection_id": a.get("event_grid_connection_id")}
-             if a.get("alert_threshold_pct") else None,
+             "alerts": [{"threshold": t, "event_grid_connection_id": a.get("event_grid_connection_id")}
+                        for t in sorted({*(a.get("alert_thresholds_pct") or []), *filter(None, [a.get("alert_threshold_pct")])})],
              "block": {"threshold": a["block_threshold_pct"]} if a.get("block_threshold_pct") else None}),
          required=("name", "amount"), read_only=False, destructive=True),
     Tool("delete_cost_control", "Delete a cost control",

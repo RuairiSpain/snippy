@@ -27,6 +27,18 @@
 - Live overview degrades per section (`warnings`) instead of failing; forecast uses daily granularity;
   unsupported `group_by` values are rejected instead of mislabelled.
 
+**Follow-up improvements**
+- Cost controls report an estimated `usage` (with `usage_note`) per reset window: Cost budgets from billed cost
+  filtered by the control's project/deployment/agent tags, Tokens budgets from Azure Monitor metrics. Controls that
+  can't be reproduced (per-session, project/agent token budgets) stay "Usage unknown" with a reason.
+- `CostControl` supports several alert thresholds (`extra_alerts`, `extra_blocks`); reading and re-saving a control
+  no longer drops any. The MCP tool takes `alert_thresholds_pct`.
+- Alerts reuse the Event Grid connection of an existing cost control when none is given.
+- APIM writes use the ETag they read (`If-Match: <etag>`) instead of `*`, so a concurrent edit yields a conflict
+  instead of being overwritten; creates send no `If-Match`.
+- Publishing is refused while `pyproject.toml` still contains `<your-org>`; `configure_plugin.py` warns about
+  placeholder manifest URLs.
+
 **Tooling**
 - `hatchling>=1.27` (required for SPDX `license` + `license-files`); ruff and mypy now pass and mypy gates CI.
 - `scripts/configure_plugin.py` builds the package before bumping the manifest version.

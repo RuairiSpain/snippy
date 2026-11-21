@@ -178,6 +178,31 @@ class ApimOperations(_Operations):
     Policy scopes: ``scope="global"``, ``"product:{id}"``, ``"api:{id}"`` or ``"operation:{api}/{op}"``.
     """
 
+    # ------------------------------------------------------------- optimistic concurrency
+    def _etag(self, resp: Any) -> str | None:
+        for k, v in resp.headers.items():
+            if k.lower() == "etag":
+                return str(v)
+        body = resp.body if isinstance(resp.body, dict) else {}
+        return body.get("etag") or body.get("eTag")
+
+    def _current_etag(self, url: str, params: Mapping[str, Any] | None = None) -> str | None:
+        """ETag of an existing entity, or ``None`` if it doesn't exist yet."""
+        try:
+            return self._etag(self._arm("GET", url, self._v.api_management, params=params))
+        except NotFoundError:
+            return None
+
+    def _put(self, url: str, body: Any, etag: str | None = None, *, lookup: bool = True) -> Any:
+        """PUT with ``If-Match: <etag>`` when updating, nothing when creating.
+
+        A wildcard ``If-Match: *`` would overwrite whatever another admin changed since we read it;
+        a real ETag turns that into a 412 (:class:`~foundry_finops.errors.ConflictError`) instead.
+        """
+        if etag is None and lookup:
+            etag = self._current_etag(url)
+        return self._arm("PUT", url, self._v.api_management, body=body, headers={"If-Match": etag} if etag else None)
+
     def service_id(self, service: str, resource_group: str | None = None) -> str:
         return apim_service_id(self._sub, self._rg_or_default(resource_group), service)
 
@@ -204,7 +229,7 @@ class ApimOperations(_Operations):
     ) -> ApimProduct:
         """Create or update a product (e.g. one per team) and link it to APIs."""
         url = f"{self.service_id(service, resource_group)}/products/{self._seg(product.name)}"
-        resp = self._arm("PUT", url, self._v.api_management, body=product.to_dict(), headers={"If-Match": "*"})
+        resp = self._put(url, product.to_dict())
         for api_id in api_ids:
             self._arm("PUT", f"{url}/apis/{self._seg(api_id)}", self._v.api_management)
         return ApimProduct.from_dict(resp.body or {})
@@ -230,7 +255,7 @@ class ApimOperations(_Operations):
         url = f"{self.service_id(service, resource_group)}/subscriptions/{self._seg(subscription.name)}"
         body = subscription.to_dict()
         body["properties"]["scope"] = self._full_scope(service, subscription.scope, resource_group)
-        resp = self._arm("PUT", url, self._v.api_management, body=body, headers={"If-Match": "*"})
+        resp = self._put(url, body)
         return ApimSubscription.from_dict(resp.body or {})
 
     def _full_scope(self, service: str, scope: str, resource_group: str | None) -> str:
@@ -267,20 +292,29 @@ class ApimOperations(_Operations):
             return f"{base}/apis/{self._seg(api)}/operations/{self._seg(op)}/policies/policy"
         raise ValueError("scope must be 'global', 'product:<id>', 'api:<id>' or 'operation:<api>/<op>'")
 
-    def get_policy(self, service: str, scope: str = "global", resource_group: str | None = None) -> str | None:
-        """Return the raw policy XML, or ``None`` if the scope has no policy."""
+    def get_policy_with_etag(
+        self, service: str, scope: str = "global", resource_group: str | None = None
+    ) -> tuple[str | None, str | None]:
+        """Return ``(policy_xml, etag)``; both ``None`` if the scope has no policy."""
         try:
             resp = self._arm("GET", self._policy_url(service, scope, resource_group), self._v.api_management,
                              params={"format": "rawxml"})
         except NotFoundError:
-            return None
-        return ((resp.body or {}).get("properties") or {}).get("value")
+            return None, None
+        return ((resp.body or {}).get("properties") or {}).get("value"), self._etag(resp)
 
-    def set_policy(self, service: str, xml: str, scope: str = "global", resource_group: str | None = None) -> None:
+    def get_policy(self, service: str, scope: str = "global", resource_group: str | None = None) -> str | None:
+        """Return the raw policy XML, or ``None`` if the scope has no policy."""
+        return self.get_policy_with_etag(service, scope, resource_group)[0]
+
+    def set_policy(self, service: str, xml: str, scope: str = "global", resource_group: str | None = None,
+                   *, etag: str | None = None) -> None:
+        """Replace a scope's policy. Pass the ``etag`` you read it with to fail (412) rather than
+        overwrite a concurrent change; without one the current ETag is looked up just before writing."""
         _parse_xml(xml)  # fail fast on malformed XML
         body = {"properties": {"format": "rawxml", "value": xml}}
-        self._arm("PUT", self._policy_url(service, scope, resource_group), self._v.api_management,
-                  body=body, headers={"If-Match": "*"})
+        url = self._policy_url(service, scope, resource_group)
+        self._put(url, body, etag, lookup=etag is None)
 
     def delete_policy(self, service: str, scope: str, resource_group: str | None = None) -> None:
         self._arm("DELETE", self._policy_url(service, scope, resource_group), self._v.api_management,
@@ -293,19 +327,21 @@ class ApimOperations(_Operations):
     def set_token_limit(self, service: str, limit: LlmTokenLimit, scope: str,
                         resource_group: str | None = None) -> str:
         """Add or replace the token-limit element at a scope. Returns the new policy XML."""
-        xml = upsert_policy_fragment(self.get_policy(service, scope, resource_group), limit.to_xml())
-        self.set_policy(service, xml, scope, resource_group)
+        current, etag = self.get_policy_with_etag(service, scope, resource_group)
+        xml = upsert_policy_fragment(current, limit.to_xml())
+        self.set_policy(service, xml, scope, resource_group, etag=etag)
         return xml
 
     def remove_token_limit(self, service: str, scope: str, resource_group: str | None = None) -> None:
-        current = self.get_policy(service, scope, resource_group)
+        current, etag = self.get_policy_with_etag(service, scope, resource_group)
         if current:
-            self.set_policy(service, remove_policy_element(current, "token-limit"), scope, resource_group)
+            self.set_policy(service, remove_policy_element(current, "token-limit"), scope, resource_group, etag=etag)
 
     def set_token_metrics(self, service: str, metric: LlmEmitTokenMetric, scope: str,
                           resource_group: str | None = None) -> str:
-        xml = upsert_policy_fragment(self.get_policy(service, scope, resource_group), metric.to_xml())
-        self.set_policy(service, xml, scope, resource_group)
+        current, etag = self.get_policy_with_etag(service, scope, resource_group)
+        xml = upsert_policy_fragment(current, metric.to_xml())
+        self.set_policy(service, xml, scope, resource_group, etag=etag)
         return xml
 
     def token_limit_inventory(self, service: str, resource_group: str | None = None) -> list[dict[str, Any]]:

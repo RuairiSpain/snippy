@@ -9,6 +9,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
+      - name: Refuse to publish placeholder metadata
+        run: "! grep -n '<your-org>' pyproject.toml"
       - run: pip install build twine && python -m build && twine check dist/*
       - uses: actions/upload-artifact@v4
         with: { name: dist, path: dist/ }

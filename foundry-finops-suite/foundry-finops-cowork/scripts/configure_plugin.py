@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import sys
 import zipfile
 from pathlib import Path
 
@@ -43,6 +44,10 @@ def main() -> None:
             raise SystemExit(f"manifest version {m['version']!r} isn't major.minor.patch; fix it or pass --no-bump")
         major, minor, patch = (int(x) for x in match.groups())
         m["version"] = f"{major}.{minor}.{patch + 1}"
+    for label, url in (("websiteUrl", m["developer"].get("websiteUrl", "")), ("privacyUrl", m["developer"].get("privacyUrl", ""))):
+        if "your-org" in url:
+            print(f"warning: developer.{label} still contains the 'your-org' placeholder ({url}); "
+                  "Microsoft validation and store review need real URLs", file=sys.stderr)
     manifest_text = json.dumps(m, indent=2) + "\n"
     out = Path(a.out)
     tmp = out.with_suffix(out.suffix + ".tmp")
