@@ -1,0 +1,52 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/teams/v1.28/MicrosoftTeams.schema.json",
+  "manifestVersion": "1.28",
+  "version": "1.0.0",
+  "id": "9deb6aaf-24f9-4ac1-b2f3-51403e43b344",
+  "developer": {
+    "name": "Ruairi O'Donnell",
+    "websiteUrl": "https://github.com/your-org/foundry-finops",
+    "privacyUrl": "https://github.com/your-org/foundry-finops/blob/main/PRIVACY.md",
+    "termsOfUseUrl": "https://github.com/your-org/foundry-finops/blob/main/LICENSE"
+  },
+  "name": {
+    "short": "Foundry FinOps",
+    "full": "Foundry FinOps for Copilot Cowork"
+  },
+  "description": {
+    "short": "Foundry spend, token usage, budgets and limits from Azure REST APIs",
+    "full": "Sign in with your Microsoft Entra ID account to report on Microsoft Foundry spend and usage across your Azure subscriptions: billed cost by project, agent, model and team; near-real-time token usage; Foundry cost controls; Cost Management budgets; quota and deployments; tags; alert rules; and Azure API Management AI-gateway token limits. Runs every call with your own Azure permissions. Includes guided skills for FinOps reports and for safely changing budgets, cost controls and token limits."
+  },
+  "icons": {
+    "color": "color.png",
+    "outline": "outline.png"
+  },
+  "accentColor": "#2B579A",
+  "agentSkills": [
+    {
+      "folder": "./skills/foundry-finops-reports"
+    },
+    {
+      "folder": "./skills/foundry-finops-governance"
+    }
+  ],
+  "agentConnectors": [
+    {
+      "id": "foundry-finops",
+      "displayName": "Foundry FinOps",
+      "description": "Microsoft Foundry cost, token usage, cost controls, budgets, quota, tags, alerts and AI-gateway token limits, using the signed-in user's Azure permissions.",
+      "toolSource": {
+        "remoteMcpServer": {
+          "mcpServerUrl": "https://finops-mcp.contoso.com/mcp",
+          "authorization": {
+            "type": "OAuthPluginVault",
+            "referenceId": "REPLACE_WITH_OAUTH_CLIENT_REGISTRATION_ID"
+          },
+          "mcpToolDescription": {
+            "file": "tools/connector-tools.json"
+          }
+        }
+      }
+    }
+  ]
+}

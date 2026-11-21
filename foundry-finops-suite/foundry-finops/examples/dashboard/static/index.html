@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Foundry FinOps</title>
+  <link rel="stylesheet" href="app.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.6/dist/chart.umd.min.js" defer></script>
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <button class="icon-btn" id="navToggle" title="Show or hide the menu" aria-label="Toggle menu">&#9776;</button>
+    <span class="brand">Foundry FinOps</span>
+    <span class="mode" id="modeBadge">…</span>
+    <div class="top-search"><input id="globalSearch" type="search" placeholder="Search pages (Ctrl+/)" aria-label="Search pages"></div>
+    <span class="who" id="whoami"></span>
+  </header>
+  <div class="crumbs"><a href="#/overview">Home</a> <span>›</span> <span id="crumbResource">…</span> <span>|</span> <strong id="crumbPage">Overview</strong></div>
+  <div class="shell">
+    <nav class="blade-menu" id="menu" aria-label="Pages">
+      <div class="menu-search"><input id="menuFilter" type="search" placeholder="Search (Ctrl+/)" aria-label="Filter menu"></div>
+      <a href="#/overview" data-page="overview"><i>◎</i>Overview</a>
+      <div class="menu-group">Monitoring</div>
+      <a href="#/logs" data-page="logs"><i>⌕</i>Logs</a>
+      <a href="#/usage" data-page="usage"><i>∿</i>Metrics (token usage)</a>
+      <a href="#/cost" data-page="cost"><i>$</i>Cost analysis</a>
+      <div class="menu-group">Cost governance</div>
+      <a href="#/cost-controls" data-page="cost-controls"><i>◈</i>Cost controls</a>
+      <a href="#/budgets" data-page="budgets"><i>▤</i>Budgets</a>
+      <a href="#/alerts" data-page="alerts"><i>⚑</i>Alerts</a>
+      <div class="menu-group">Configuration</div>
+      <a href="#/tags" data-page="tags"><i>#</i>Tags</a>
+      <a href="#/quota" data-page="quota"><i>▥</i>Quota &amp; deployments</a>
+      <a href="#/gateway" data-page="gateway"><i>⇄</i>AI gateway (APIM)</a>
+    </nav>
+    <main id="view" tabindex="-1"></main>
+  </div>
+  <aside class="flyout" id="flyout" aria-hidden="true" role="dialog" aria-labelledby="flyoutTitle">
+    <div class="flyout-head"><h2 id="flyoutTitle"></h2><button class="icon-btn" id="flyoutClose" aria-label="Close">✕</button></div>
+    <div class="flyout-body" id="flyoutBody"></div>
+    <div class="flyout-foot" id="flyoutFoot"></div>
+  </aside>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+</body>
+</html>

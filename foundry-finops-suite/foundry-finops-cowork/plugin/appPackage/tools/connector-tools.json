@@ -1,0 +1,812 @@
+{
+  "tools": [
+    {
+      "name": "get_finops_overview",
+      "title": "FinOps overview",
+      "description": "Headline Foundry spend and usage: billed spend month to date, month-end forecast, tokens and requests in the last 24 hours, cost controls needing attention, budgets, highest quota use, and the top projects, agents and models by spend. Billed cost lags usage by 8\u201324 hours; token counts are near real time.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "days": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 90,
+            "default": 30,
+            "description": "Look-back window in days for the top-N rankings."
+          },
+          "subscription_id": {
+            "type": "string",
+            "description": "Azure subscription ID. Defaults to the server's configured subscription."
+          },
+          "resource_group": {
+            "type": "string",
+            "description": "Resource group that holds the Foundry resource. Defaults to the server's configured group."
+          },
+          "foundry_account": {
+            "type": "string",
+            "description": "Foundry resource (account) name. Defaults to the server's configured resource."
+          }
+        },
+        "additionalProperties": false
+      },
+      "annotations": {
+        "title": "FinOps overview",
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "get_cost_breakdown",
+      "title": "Cost breakdown",
+      "description": "Billed cost from Azure Cost Management grouped by project, agent, deployment, model or team, with totals, share of spend and a daily series. Project, deployment and agent use the billing tags Foundry adds to model charges; team uses the configured team tag.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "group_by": {
+            "type": "string",
+            "enum": [
+              "project",
+              "agent",
+              "deployment",
+              "model",
+              "team"
+            ],
+            "default": "project"
+          },
+          "days": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 365,
+            "default": 30
+          },
+          "subscription_id": {
+            "type": "string",
+            "description": "Azure subscription ID. Defaults to the server's configured subscription."
+          },
+          "resource_group": {
+            "type": "string",
+            "description": "Resource group that holds the Foundry resource. Defaults to the server's configured group."
+          },
+          "foundry_account": {
+            "type": "string",
+            "description": "Foundry resource (account) name. Defaults to the server's configured resource."
+          }
+        },
+        "additionalProperties": false
+      },
+      "annotations": {
+        "title": "Cost breakdown",
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "get_token_usage",
+      "title": "Token usage",
+      "description": "Input, output and total tokens plus request counts over time, split by deployment or model (Azure Monitor metrics, near real time). In demo mode project, agent and team splits are also available.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "group_by": {
+            "type": "string",
+            "enum": [
+              "project",
+              "agent",
+              "deployment",
+              "model",
+              "team"
+            ],
+            "default": "deployment"
+          },
+          "hours": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 720,
+            "default": 168
+          },
+          "subscription_id": {
+            "type": "string",
+            "description": "Azure subscription ID. Defaults to the server's configured subscription."
+          },
+          "resource_group": {
+            "type": "string",
+            "description": "Resource group that holds the Foundry resource. Defaults to the server's configured group."
+          },
+          "foundry_account": {
+            "type": "string",
+            "description": "Foundry resource (account) name. Defaults to the server's configured resource."
+          }
+        },
+        "additionalProperties": false
+      },
+      "annotations": {
+        "title": "Token usage",
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "list_cost_controls",
+      "title": "List cost controls",
+      "description": "Foundry cost controls (preview) on the Foundry resource and its projects: budget type and amount, reset period, what each applies to, alert/block thresholds, estimated usage against the limit and state (On track, Near threshold, Limit reached).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "subscription_id": {
+            "type": "string",
+            "description": "Azure subscription ID. Defaults to the server's configured subscription."
+          },
+          "resource_group": {
+            "type": "string",
+            "description": "Resource group that holds the Foundry resource. Defaults to the server's configured group."
+          },
+          "foundry_account": {
+            "type": "string",
+            "description": "Foundry resource (account) name. Defaults to the server's configured resource."
+          }
+        },
+        "additionalProperties": false
+      },
+      "annotations": {
+        "title": "List cost controls",
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "upsert_cost_control",
+      "title": "Create or update a cost control",
+      "description": "Create or replace a Foundry cost control that alerts (Event Grid) or blocks requests when spending (USD) or tokens reach a threshold. Blocked requests get HTTP 429 with x-ms-budget-cause: budget_exceeded. Takes effect within about 15 minutes. The budget type can't be changed after creation.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,63}$"
+          },
+          "project": {
+            "type": "string",
+            "description": "Create the cost control inside this project; omit for the Foundry resource."
+          },
+          "category": {
+            "type": "string",
+            "enum": [
+              "Cost",
+              "Tokens"
+            ],
+            "default": "Cost"
+          },
+          "amount": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "USD for Cost, whole tokens for Tokens."
+          },
+          "time_grain": {
+            "type": "string",
+            "enum": [
+              "Daily",
+              "Weekly",
+              "Monthly"
+            ],
+            "default": "Monthly"
+          },
+          "start_date": {
+            "type": "string",
+            "description": "UTC date (YYYY-MM-DD), today or later."
+          },
+          "end_date": {
+            "type": "string",
+            "description": "UTC date (YYYY-MM-DD)."
+          },
+          "filters": {
+            "type": "object",
+            "description": "Filter name \u2192 list of names. Keys: project, deployment, agent, sessionId, tokenType (input/output). An agent filter needs exactly one project.",
+            "additionalProperties": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "sharing": {
+            "type": "string",
+            "enum": [
+              "shared",
+              "agent",
+              "sessionId",
+              "project"
+            ],
+            "default": "shared"
+          },
+          "alert_threshold_pct": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 100
+          },
+          "alert_thresholds_pct": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "minimum": 1,
+              "maximum": 100
+            },
+            "maxItems": 5,
+            "description": "Several alert thresholds, e.g. [50, 80, 95]."
+          },
+          "event_grid_connection_id": {
+            "type": "string",
+            "description": "Foundry connection resource ID for alerts. Omit to reuse the one an existing cost control already uses."
+          },
+          "block_threshold_pct": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 100
+          },
+          "subscription_id": {
+            "type": "string",
+            "description": "Azure subscription ID. Defaults to the server's configured subscription."
+          },
+          "resource_group": {
+            "type": "string",
+            "description": "Resource group that holds the Foundry resource. Defaults to the server's configured group."
+          },
+          "foundry_account": {
+            "type": "string",
+            "description": "Foundry resource (account) name. Defaults to the server's configured resource."
+          }
+        },
+        "required": [
+          "name",
+          "amount"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "title": "Create or update a cost control",
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "delete_cost_control",
+      "title": "Delete a cost control",
+      "description": "Delete a Foundry cost control. Its alerts and blocks stop.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "project": {
+            "type": "string"
+          },
+          "subscription_id": {
+            "type": "string",
+            "description": "Azure subscription ID. Defaults to the server's configured subscription."
+          },
+          "resource_group": {
+            "type": "string",
+            "description": "Resource group that holds the Foundry resource. Defaults to the server's configured group."
+          },
+          "foundry_account": {
+            "type": "string",
+            "description": "Foundry resource (account) name. Defaults to the server's configured resource."
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "title": "Delete a cost control",
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "list_budgets",
+      "title": "List budgets",
+      "description": "Azure Cost Management budgets in scope with amount, current and forecast spend, percent used, filters and alert conditions. Budgets alert on billed cost and can't block requests.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "subscription_id": {
+            "type": "string",
+            "description": "Azure subscription ID. Defaults to the server's configured subscription."
+          },
+          "resource_group": {
+            "type": "string",
+            "description": "Resource group that holds the Foundry resource. Defaults to the server's configured group."
+          },
+          "foundry_account": {
+            "type": "string",
+            "description": "Foundry resource (account) name. Defaults to the server's configured resource."
+          }
+        },
+        "additionalProperties": false
+      },
+      "annotations": {
+        "title": "List budgets",
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "upsert_budget",
+      "title": "Create or update a budget",
+      "description": "Create or replace an Azure Cost Management budget with email alerts at actual and forecasted thresholds.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,63}$"
+          },
+          "amount": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "time_grain": {
+            "type": "string",
+            "enum": [
+              "Monthly",
+              "Quarterly",
+              "Annually"
+            ],
+            "default": "Monthly"
+          },
+          "start_date": {
+            "type": "string",
+            "description": "First day of a month, YYYY-MM-DD."
+          },
+          "end_date": {
+            "type": "string"
+          },
+          "tag_filter": {
+            "type": "object",
+            "description": "Optional tag filter, e.g. {\"name\":\"team\",\"values\":[\"Support\"]}.",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "values": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "minItems": 1
+              }
+            },
+            "required": [
+              "name",
+              "values"
+            ]
+          },
+          "actual_alert_pct": {
+            "type": "number",
+            "default": 80
+          },
+          "forecast_alert_pct": {
+            "type": "number",
+            "default": 100
+          },
+          "contact_emails": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "subscription_id": {
+            "type": "string",
+            "description": "Azure subscription ID. Defaults to the server's configured subscription."
+          },
+          "resource_group": {
+            "type": "string",
+            "description": "Resource group that holds the Foundry resource. Defaults to the server's configured group."
+          },
+          "foundry_account": {
+            "type": "string",
+            "description": "Foundry resource (account) name. Defaults to the server's configured resource."
+          }
+        },
+        "required": [
+          "name",
+          "amount"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "title": "Create or update a budget",
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "delete_budget",
+      "title": "Delete a budget",
+      "description": "Delete an Azure Cost Management budget.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "subscription_id": {
+            "type": "string",
+            "description": "Azure subscription ID. Defaults to the server's configured subscription."
+          },
+          "resource_group": {
+            "type": "string",
+            "description": "Resource group that holds the Foundry resource. Defaults to the server's configured group."
+          },
+          "foundry_account": {
+            "type": "string",
+            "description": "Foundry resource (account) name. Defaults to the server's configured resource."
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "title": "Delete a budget",
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "get_quota_and_deployments",
+      "title": "Quota and deployments",
+      "description": "Regional model quota (thousands of tokens per minute) used and available, and each model deployment's type, capacity and TPM.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "subscription_id": {
+            "type": "string",
+            "description": "Azure subscription ID. Defaults to the server's configured subscription."
+          },
+          "resource_group": {
+            "type": "string",
+            "description": "Resource group that holds the Foundry resource. Defaults to the server's configured group."
+          },
+          "foundry_account": {
+            "type": "string",
+            "description": "Foundry resource (account) name. Defaults to the server's configured resource."
+          }
+        },
+        "additionalProperties": false
+      },
+      "annotations": {
+        "title": "Quota and deployments",
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "set_deployment_capacity",
+      "title": "Change deployment capacity",
+      "description": "Change a model deployment's capacity (its share of regional quota, in thousands of TPM for Standard types).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "deployment": {
+            "type": "string"
+          },
+          "capacity": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "subscription_id": {
+            "type": "string",
+            "description": "Azure subscription ID. Defaults to the server's configured subscription."
+          },
+          "resource_group": {
+            "type": "string",
+            "description": "Resource group that holds the Foundry resource. Defaults to the server's configured group."
+          },
+          "foundry_account": {
+            "type": "string",
+            "description": "Foundry resource (account) name. Defaults to the server's configured resource."
+          }
+        },
+        "required": [
+          "deployment",
+          "capacity"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "title": "Change deployment capacity",
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "list_tags",
+      "title": "List tags",
+      "description": "Tags (team, cost centre, owner, env) on the resource group, Foundry resource, projects and AI gateway.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "subscription_id": {
+            "type": "string",
+            "description": "Azure subscription ID. Defaults to the server's configured subscription."
+          },
+          "resource_group": {
+            "type": "string",
+            "description": "Resource group that holds the Foundry resource. Defaults to the server's configured group."
+          },
+          "foundry_account": {
+            "type": "string",
+            "description": "Foundry resource (account) name. Defaults to the server's configured resource."
+          }
+        },
+        "additionalProperties": false
+      },
+      "annotations": {
+        "title": "List tags",
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "set_tags",
+      "title": "Replace tags",
+      "description": "Replace all tags on one Azure scope (resource ID). Pass the full set you want to keep.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "scope": {
+            "type": "string",
+            "description": "Full Azure resource ID."
+          },
+          "tags": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "subscription_id": {
+            "type": "string",
+            "description": "Azure subscription ID. Defaults to the server's configured subscription."
+          },
+          "resource_group": {
+            "type": "string",
+            "description": "Resource group that holds the Foundry resource. Defaults to the server's configured group."
+          },
+          "foundry_account": {
+            "type": "string",
+            "description": "Foundry resource (account) name. Defaults to the server's configured resource."
+          }
+        },
+        "required": [
+          "scope",
+          "tags"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "title": "Replace tags",
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "list_alert_rules",
+      "title": "List alert rules",
+      "description": "Azure Monitor metric alerts on token metrics, log search alerts (KQL) and the action groups they notify.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "subscription_id": {
+            "type": "string",
+            "description": "Azure subscription ID. Defaults to the server's configured subscription."
+          },
+          "resource_group": {
+            "type": "string",
+            "description": "Resource group that holds the Foundry resource. Defaults to the server's configured group."
+          },
+          "foundry_account": {
+            "type": "string",
+            "description": "Foundry resource (account) name. Defaults to the server's configured resource."
+          }
+        },
+        "additionalProperties": false
+      },
+      "annotations": {
+        "title": "List alert rules",
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "get_gateway_overview",
+      "title": "AI gateway overview",
+      "description": "Azure API Management AI-gateway products (teams), subscriptions and llm-token-limit policies (tokens per minute and token quota per period).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "subscription_id": {
+            "type": "string",
+            "description": "Azure subscription ID. Defaults to the server's configured subscription."
+          },
+          "resource_group": {
+            "type": "string",
+            "description": "Resource group that holds the Foundry resource. Defaults to the server's configured group."
+          },
+          "foundry_account": {
+            "type": "string",
+            "description": "Foundry resource (account) name. Defaults to the server's configured resource."
+          }
+        },
+        "additionalProperties": false
+      },
+      "annotations": {
+        "title": "AI gateway overview",
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "set_gateway_token_limit",
+      "title": "Set gateway token limit",
+      "description": "Add or replace an llm-token-limit policy at a scope: 'global', or 'product:' followed by the API Management product ID (for example 'product:team-risk'). Over the TPM limit callers get 429; over the quota they get 403.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "scope": {
+            "type": "string"
+          },
+          "tokens_per_minute": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "token_quota": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "token_quota_period": {
+            "type": "string",
+            "enum": [
+              "Hourly",
+              "Daily",
+              "Weekly",
+              "Monthly",
+              "Yearly"
+            ]
+          },
+          "counter_key": {
+            "type": "string",
+            "default": "@(context.Subscription.Id)"
+          },
+          "subscription_id": {
+            "type": "string",
+            "description": "Azure subscription ID. Defaults to the server's configured subscription."
+          },
+          "resource_group": {
+            "type": "string",
+            "description": "Resource group that holds the Foundry resource. Defaults to the server's configured group."
+          },
+          "foundry_account": {
+            "type": "string",
+            "description": "Foundry resource (account) name. Defaults to the server's configured resource."
+          }
+        },
+        "required": [
+          "scope"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "title": "Set gateway token limit",
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "list_log_tables_and_queries",
+      "title": "Log tables and example queries",
+      "description": "Tables and columns available to run_kql_query, plus ready-made KQL examples for token usage and cost by model, agent and team.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "subscription_id": {
+            "type": "string",
+            "description": "Azure subscription ID. Defaults to the server's configured subscription."
+          },
+          "resource_group": {
+            "type": "string",
+            "description": "Resource group that holds the Foundry resource. Defaults to the server's configured group."
+          },
+          "foundry_account": {
+            "type": "string",
+            "description": "Foundry resource (account) name. Defaults to the server's configured resource."
+          }
+        },
+        "additionalProperties": false
+      },
+      "annotations": {
+        "title": "Log tables and example queries",
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "run_kql_query",
+      "title": "Run a KQL query",
+      "description": "Run a read-only KQL query against the configured Application Insights / Log Analytics data (tracing, APIM token metrics, usage records). Call list_log_tables_and_queries first to see tables and examples. Use summarize to keep results small.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string"
+          },
+          "timespan": {
+            "type": "string",
+            "default": "P7D",
+            "description": "ISO-8601 duration, e.g. PT24H, P7D, P30D."
+          },
+          "subscription_id": {
+            "type": "string",
+            "description": "Azure subscription ID. Defaults to the server's configured subscription."
+          },
+          "resource_group": {
+            "type": "string",
+            "description": "Resource group that holds the Foundry resource. Defaults to the server's configured group."
+          },
+          "foundry_account": {
+            "type": "string",
+            "description": "Foundry resource (account) name. Defaults to the server's configured resource."
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "title": "Run a KQL query",
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    }
+  ]
+}
