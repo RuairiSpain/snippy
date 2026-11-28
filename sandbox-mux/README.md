@@ -135,10 +135,16 @@ from the environment (the environment wins). Values are validated at startup.
 | `SANDBOX_MUX_TURN_TIMEOUT_SECONDS` | `session.turn_timeout_seconds` | Kill a running agent turn |
 | `SANDBOX_MUX_QUEUE_TIMEOUT_SECONDS` | `session.queue_timeout_seconds` | Wait for capacity before HTTP 429 |
 | `SANDBOX_MUX_MIN_SANDBOXES`, `_MAX_SANDBOXES`, `_USERS_PER_SANDBOX` | `pool.*` | Pool shape |
+| `SANDBOX_MUX_CPU`, `_MEMORY`, `_DISK_SIZE` | `pool.cpu`, `pool.memory`, `pool.disk_size` | Size of each sandbox, e.g. `2` or `2000m`, `4Gi`, `20Gi`. Shared by all users on it, so size for `users_per_sandbox`. Applied at creation |
 | `SANDBOX_MUX__<SECTION>__<KEY>` | any setting | e.g. `SANDBOX_MUX__POOL__STRATEGY=spread` |
 
-`SANDBOX_MUX_IDLE_TIMEOUT_SECONDS` is applied when a sandbox is created, so existing
-sandboxes keep the old value until they are replaced.
+These variables can also be put in a `.env` file in the working directory (or the path in
+`SANDBOX_MUX_ENV_FILE`); real environment variables take precedence. Only `SANDBOX_MUX*`,
+`REDIS_URL` and `OBO_CLIENT_SECRET` are read from it.
+
+The idle timeout, CPU, memory and disk are applied when a sandbox is created, so existing
+sandboxes keep their old values until they are replaced. The group's `maxSandboxCount` and
+your subscription quota still cap the total.
 
 ## Layout
 

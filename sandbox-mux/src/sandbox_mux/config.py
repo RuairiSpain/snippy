@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class AzureConfig(BaseModel):
@@ -26,12 +26,21 @@ class PoolConfig(BaseModel):
     strategy: Literal["pack", "spread"] = "pack"
     disk: str | None = "ubuntu"
     disk_id: str | None = None
-    cpu: str = "1000m"
-    memory: str = "2048Mi"
+    # Size of EACH sandbox, shared by all users on it: scale with users_per_sandbox.
+    # cpu: cores or millicores ("2", "1.5", "2000m"). memory/disk: "4096Mi", "4Gi".
+    cpu: str = Field("1000m", pattern=r"^\d+(\.\d+)?m?$")
+    memory: str = Field("2048Mi", pattern=r"^\d+(\.\d+)?(Ki|Mi|Gi|Ti|K|M|G|T)?$")
+    disk_size: str | None = Field(None, pattern=r"^\d+(\.\d+)?(Ki|Mi|Gi|Ti|K|M|G|T)?$")
     auto_suspend_seconds: int = Field(900, ge=60)
     auto_suspend_mode: Literal["Memory", "Disk"] = "Memory"
     create_timeout_seconds: int = Field(300, ge=10)
     empty_ttl_seconds: int = Field(600, ge=0)
+
+    @field_validator("cpu", "memory", "disk_size", mode="before")
+    @classmethod
+    def _numbers_as_text(cls, v: object) -> object:
+        # `cpu: 2` in YAML, or SANDBOX_MUX_CPU=2, parses as a number; sizes are strings.
+        return str(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else v
 
     @model_validator(mode="after")
     def _check(self) -> "PoolConfig":
@@ -143,7 +152,11 @@ class Config(BaseModel):
     def load(cls, path: str | os.PathLike[str] | None = None) -> "Config":
         path = Path(path or os.environ.get("SANDBOX_MUX_CONFIG", "config.yaml"))
         data = yaml.safe_load(path.read_text()) or {}
-        apply_env_overrides(data, os.environ)
+        env = {**load_env_file(os.environ.get("SANDBOX_MUX_ENV_FILE", ".env")), **os.environ}
+        for k in ("REDIS_URL", "OBO_CLIENT_SECRET"):
+            if k in env:
+                os.environ.setdefault(k, env[k])
+        apply_env_overrides(data, env)
         return cls.model_validate(data)
 
 
@@ -158,7 +171,32 @@ ENV_ALIASES: dict[str, str] = {
     "MIN_SANDBOXES": "pool.min_sandboxes",
     "MAX_SANDBOXES": "pool.max_sandboxes",
     "USERS_PER_SANDBOX": "pool.users_per_sandbox",
+    "CPU": "pool.cpu",
+    "MEMORY": "pool.memory",
+    "DISK_SIZE": "pool.disk_size",
 }
+
+
+def load_env_file(path: str | os.PathLike[str]) -> dict[str, str]:
+    """Parse a `.env` file (KEY=VALUE lines, `#` comments, optional quotes and `export`).
+    Variables already set in the real environment win. A missing file is not an error.
+    Only SANDBOX_MUX_*, REDIS_URL and OBO_CLIENT_SECRET are read from it."""
+    out: dict[str, str] = {}
+    try:
+        text = Path(path).read_text(encoding="utf-8")
+    except OSError:
+        return out
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.removeprefix("export ").partition("=")
+        key, value = key.strip(), value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        if key.startswith("SANDBOX_MUX") or key in ("REDIS_URL", "OBO_CLIENT_SECRET"):
+            out[key] = value
+    return out
 
 
 def _set_path(data: dict, path: list[str], value: object) -> None:

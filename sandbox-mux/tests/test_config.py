@@ -1,7 +1,7 @@
 import pytest
 import yaml
 
-from sandbox_mux.config import Config, apply_env_overrides
+from sandbox_mux.config import Config, apply_env_overrides, load_env_file
 
 
 def load(tmp_path, monkeypatch, yaml_data, env):
@@ -61,3 +61,31 @@ def test_config_path_variable_is_not_mistaken_for_a_setting():
 def test_invalid_env_values_fail_at_startup(tmp_path, monkeypatch, env, message):
     with pytest.raises(ValueError, match=message):
         load(tmp_path, monkeypatch, {}, env)
+
+
+def test_sandbox_size_from_env(tmp_path, monkeypatch):
+    c = load(tmp_path, monkeypatch, {"pool": {"cpu": "1000m"}},
+             {"SANDBOX_MUX_CPU": "4", "SANDBOX_MUX_MEMORY": "8Gi", "SANDBOX_MUX_DISK_SIZE": "20Gi"})
+    assert (c.pool.cpu, c.pool.memory, c.pool.disk_size) == ("4", "8Gi", "20Gi")
+
+
+@pytest.mark.parametrize("env", [{"SANDBOX_MUX_CPU": "lots"}, {"SANDBOX_MUX_MEMORY": "8 GB"},
+                                 {"SANDBOX_MUX_DISK_SIZE": "-1"}])
+def test_bad_sandbox_size_is_rejected(tmp_path, monkeypatch, env):
+    with pytest.raises(ValueError):
+        load(tmp_path, monkeypatch, {}, env)
+
+
+def test_dotenv_file_is_read_and_real_env_wins(tmp_path, monkeypatch):
+    envfile = tmp_path / ".env"
+    envfile.write_text("# sizes\nSANDBOX_MUX_CPU=2\nexport SANDBOX_MUX_MEMORY=\"4Gi\"\n"
+                       "SANDBOX_MUX_MAX_SANDBOXES=7\nUNRELATED=x\n")
+    monkeypatch.setenv("SANDBOX_MUX_ENV_FILE", str(envfile))
+    monkeypatch.setenv("SANDBOX_MUX_MAX_SANDBOXES", "3")
+    c = load(tmp_path, monkeypatch, {}, {})
+    assert (c.pool.cpu, c.pool.memory, c.pool.max_sandboxes) == ("2", "4Gi", 3)
+    assert load_env_file(envfile).get("UNRELATED") is None
+
+
+def test_missing_dotenv_is_fine(tmp_path):
+    assert load_env_file(tmp_path / "nope.env") == {}

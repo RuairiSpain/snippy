@@ -1,10 +1,12 @@
-# Copy to config.yaml and point SANDBOX_MUX_CONFIG at it.
+# Copy to config.yaml and point SANDBOX_MUX_CONFIG at it. The same variables can live in a
+# .env file in the working directory (or SANDBOX_MUX_ENV_FILE); real environment variables win.
 # Any setting can be overridden from the environment (environment wins over this file):
 #   SANDBOX_MUX_IDLE_TIMEOUT_SECONDS    pool.auto_suspend_seconds   suspend an idle sandbox
 #   SANDBOX_MUX_SESSION_TTL_SECONDS     session.user_idle_ttl_seconds   remove an idle user's session
 #   SANDBOX_MUX_EMPTY_SANDBOX_TTL_SECONDS  pool.empty_ttl_seconds   delete an empty sandbox
 #   SANDBOX_MUX_HISTORY_TTL_SECONDS, _TURN_TIMEOUT_SECONDS, _QUEUE_TIMEOUT_SECONDS,
 #   SANDBOX_MUX_MIN_SANDBOXES, _MAX_SANDBOXES, _USERS_PER_SANDBOX
+#   SANDBOX_MUX_CPU, _MEMORY, _DISK_SIZE   size of each sandbox
 #   SANDBOX_MUX__<SECTION>__<KEY>       anything else, e.g. SANDBOX_MUX__POOL__STRATEGY=spread
 #
 # Secrets do not belong here. Redis credentials come from the REDIS_URL
@@ -28,8 +30,9 @@ pool:
                                # spread = least loaded first (lowest contention)
   disk: ubuntu                 # public image name, or set disk_id for a private image
   # disk_id: "..."
-  cpu: "2000m"
-  memory: "4096Mi"
+  cpu: "2000m"                 # per sandbox, shared by its users (env: SANDBOX_MUX_CPU)
+  memory: "4096Mi"             # per sandbox (env: SANDBOX_MUX_MEMORY)
+  # disk_size: "20Gi"          # per sandbox (env: SANDBOX_MUX_DISK_SIZE)
   auto_suspend_seconds: 900    # platform suspends a sandbox after this much inactivity
   auto_suspend_mode: Memory    # Memory | Disk
   create_timeout_seconds: 300

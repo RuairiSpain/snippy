@@ -64,6 +64,7 @@ class AzureSandboxBackend:
             disk_id=p.disk_id,
             cpu=p.cpu,
             memory=p.memory,
+            disk_size=p.disk_size,
             auto_suspend_seconds=p.auto_suspend_seconds,
             auto_suspend_mode=p.auto_suspend_mode,
             labels=labels,
