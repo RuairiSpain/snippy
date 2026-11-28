@@ -116,7 +116,8 @@ def create_app(cfg: Config | None = None, *, backend=None, redis_client=None,
                 raise HTTPException(401, f"No user token in the {cfg.obo.assertion_header} header")
             try:
                 # Fail before taking a sandbox slot if the delegation cannot succeed.
-                tokens = await broker.tokens(who.assertion, req.obo_resources)
+                tokens = await broker.tokens(who.assertion, req.obo_resources,
+                                             tenant_id=who.tenant_id, oid=who.oid)
             except OboError as e:
                 headers = {"X-Claims-Challenge": e.claims} if e.claims and e.status == 403 else None
                 raise HTTPException(e.status, e.detail, headers=headers) from e

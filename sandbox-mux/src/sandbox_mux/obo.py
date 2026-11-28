@@ -53,6 +53,26 @@ def check_same_user(assertion: str, tenant_id: str, oid: str) -> None:
         raise OboError(403, "OBO assertion does not belong to the authenticated user")
 
 
+def check_delegated(token: str, alias: str, tenant_id: str, oid: str) -> None:
+    """Refuse anything that is not the signed-in user's delegated token.
+
+    The token comes straight from Entra over TLS, so its claims are read without verifying a
+    signature. This guards against a mis-set scope (`.default` on an app permission), a
+    resource that returns an app-only token, and a mix-up between users."""
+    try:
+        claims = jwt.decode(token, options={"verify_signature": False})
+    except jwt.PyJWTError:
+        raise OboError(502, f"The '{alias}' token is not a JWT, so delegation cannot be verified. "
+                            "Set obo.verify_delegated: false only if this API issues opaque tokens.") from None
+    delegated = "scp" in claims and claims.get("idtyp") != "app"
+    if not delegated:
+        log.error("OBO token for %s is not delegated (no scp claim or app-only)", alias)
+        raise OboError(502, f"The '{alias}' token is not a delegated user token")
+    if claims.get("oid") != oid or claims.get("tid") != tenant_id:
+        log.error("OBO token for %s does not belong to the signed-in user", alias)
+        raise OboError(502, f"The '{alias}' token does not belong to the signed-in user")
+
+
 class OboBroker:
     def __init__(self, cfg: Config, app_factory: Callable[[], Any] | None = None) -> None:
         self.cfg = cfg
@@ -102,9 +122,15 @@ class OboBroker:
             raise OboError(422, f"At most {o.max_resources_per_turn} obo resources per request")
         return unique
 
-    async def tokens(self, assertion: str, aliases: list[str]) -> dict[str, dict[str, Any]]:
+    async def tokens(self, assertion: str, aliases: list[str], *, tenant_id: str | None = None,
+                     oid: str | None = None) -> dict[str, dict[str, Any]]:
+        """Delegated tokens for the requested aliases. When `tenant_id` and `oid` are given
+        (the API always gives them) each token is checked to be that user's delegated token."""
         aliases = self.validate(aliases)
         results = await asyncio.gather(*(self._one(assertion, a) for a in aliases))
+        if self.cfg.obo.verify_delegated and oid and tenant_id:
+            for alias, r in zip(aliases, results):
+                check_delegated(r["access_token"], alias, tenant_id, oid)
         return dict(zip(aliases, results))
 
     async def _one(self, assertion: str, alias: str) -> dict[str, Any]:

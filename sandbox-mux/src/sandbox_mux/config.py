@@ -352,6 +352,10 @@ class OboConfig(BaseModel):
     # alias -> scopes. Callers may only request aliases listed here.
     resources: dict[str, list[str]] = {}
     max_resources_per_turn: int = Field(3, ge=1)
+    # After each exchange, check that the token is the signed-in user's delegated token (has
+    # `scp`, no app-only role claims, same oid and tenant) and refuse to hand it over otherwise.
+    # Turn off only for an API that issues opaque (non-JWT) tokens.
+    verify_delegated: bool = True
 
     @model_validator(mode="after")
     def _check(self) -> "OboConfig":

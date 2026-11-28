@@ -121,6 +121,8 @@ obo:
   resources:                   # alias -> scopes. Callers request aliases, never raw scopes.
     graph: ["https://graph.microsoft.com/.default"]
     storage: ["https://storage.azure.com/user_impersonation"]
+    # workiq: ["api://workiq.svc.cloud.microsoft/WorkIQAgent.Ask"]   # Work IQ (see README); also allow its host in pool.egress
+  verify_delegated: true       # refuse any token that is not this user's delegated token
 
 redis:
   key_prefix: "smux"

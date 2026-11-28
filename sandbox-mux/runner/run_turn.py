@@ -28,6 +28,12 @@ def obo_token(alias: str) -> str:
         return json.load(f)[alias]["access_token"]
 
 
+def bearer_headers(alias: str) -> dict[str, str]:
+    """Headers for calling a downstream API as the signed-in user, e.g. an HTTP MCP server:
+    `{"Authorization": "Bearer <delegated token>"}`."""
+    return {"Authorization": f"Bearer {obo_token(alias)}"}
+
+
 def mcp_config() -> dict | None:
     """The MCP client configuration for the connectors attached to this sandbox, if the
     operator set connectors.config_file. The format is whatever the platform wrote."""

@@ -396,6 +396,67 @@ Limits to be aware of:
   to rotate). The app registration needs the downstream delegated permissions and consent.
 * `obo_token(alias)` in `runner/run_turn.py` shows how an agent reads a token.
 
+## Work IQ, as the signed-in user
+
+**Use On-Behalf-Of, not a connector.** Work IQ's MCP endpoint is `https://workiq.svc.cloud.microsoft/mcp`.
+Microsoft's Foundry documentation says it needs *delegated* Entra authentication with the scope
+`api://workiq.svc.cloud.microsoft/WorkIQAgent.Ask`, runs in the context of the signed-in user, and
+**does not support application-only authentication**. The sandbox connector docs show only
+`--authorization system`, which is the sandbox group's identity, shared by every user. A connector would
+therefore either fail or run as the wrong identity. I found no documented user-delegated mode for
+sandbox connectors, so do not rely on one. The OBO path below does this properly and is built.
+
+```yaml
+obo:
+  enabled: true
+  client_id: "<your app registration>"
+  resources:
+    workiq: ["api://workiq.svc.cloud.microsoft/WorkIQAgent.Ask"]
+pool:
+  egress:
+    mode: allowlist
+    allow_hosts: ["workiq.svc.cloud.microsoft"]     # the only outbound host the agent needs
+```
+
+The caller asks for it per request, `{"prompt": "...", "obo_resources": ["workiq"]}`, and the agent
+process, running as that user, calls the endpoint with the user's token:
+
+```python
+from run_turn import bearer_headers          # runner/run_turn.py
+headers = bearer_headers("workiq")           # {"Authorization": "Bearer <the user's delegated token>"}
+# pass `headers` to your MCP client for https://workiq.svc.cloud.microsoft/mcp
+```
+
+**What makes sure it is the user's delegation**, and not something broader:
+
+1. The only credential the agent receives is the OBO token for that user, in a file only that user's
+   process can read, deleted after the turn. There is no shared connector identity and no secret in the
+   image or environment.
+2. After every exchange the service checks the token before handing it over (`obo.verify_delegated`,
+   on by default): it must carry an `scp` claim and not be an app token, and its `oid` and tenant must
+   equal the signed-in caller's. Anything else is refused with HTTP 502 before a sandbox slot is taken
+   or a byte is written. A mis-set scope, an app-only token, or a mix-up between users cannot reach the agent.
+3. The assertion must be the caller's own token (checked, including when sent in a different header),
+   and callers choose aliases, never scopes.
+4. Do **not** attach a Work IQ connector to the pool: that would add a second, shared identity.
+5. With the egress allowlist the agent can reach only Work IQ, not arbitrary hosts, which limits where
+   a token could be sent.
+
+**Tenant setup (from the Foundry Work IQ documentation; I could not test any of this):**
+* A Global Administrator provisions the Work IQ service principal and grants admin consent for
+  `WorkIQAgent.Ask`, once.
+* Your app registration (`obo.client_id`, the one behind `auth.audience`) needs the delegated permission
+  `WorkIQAgent.Ask` on the Work IQ API, with consent, or the exchange returns a consent error (HTTP 403
+  with `X-Claims-Challenge`; the client must send the user through consent or step-up sign-in).
+* Billing: the Work IQ API is usage-based (Copilot Credits); connector-backed Microsoft 365 tools may
+  need a Microsoft 365 Copilot licence per user.
+* Microsoft warns that data can leave the Azure compliance boundary when you use Work IQ.
+
+Not verified: that Work IQ returns JWT access tokens (if it returns opaque tokens the check fails
+closed and tells you to set `verify_delegated: false`, which removes check 2), the exact tool names the
+MCP endpoint exposes, and the admin-consent steps. The Foundry page also says the preview built-in tool
+uses the A2A endpoint while the MCP path is the generally available one; this project uses MCP.
+
 ## Timeouts and environment variables
 
 Foundry hosted sessions have a 15-minute idle timeout that the public docs describe as a

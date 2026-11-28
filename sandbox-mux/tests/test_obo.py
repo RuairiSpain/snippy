@@ -34,15 +34,22 @@ def obo_cfg(**over) -> Config:
     return Config.model_validate(data)
 
 
+def delegated_token(scope: str, oid: str = "o1", tid: str = TENANT, **claims) -> str:
+    """What Entra returns for an OBO exchange: a JWT for the user, with an `scp` claim."""
+    body = {"oid": oid, "tid": tid, "scp": scope.rsplit("/", 1)[-1], "aud": "api://x", **claims}
+    return jwt.encode({k: v for k, v in body.items() if v is not None}, "k" * 32, algorithm="HS256")
+
+
 class FakeMsal:
-    def __init__(self, fail: dict | None = None):
-        self.calls, self.fail = [], fail
+    def __init__(self, fail: dict | None = None, claims: dict | None = None, token=None):
+        self.calls, self.fail, self.claims, self.token = [], fail, claims or {}, token
 
     def acquire_token_on_behalf_of(self, assertion, scopes):
         self.calls.append((assertion, scopes))
         if self.fail:
             return self.fail
-        return {"access_token": f"AT-{scopes[0]}", "token_type": "Bearer", "expires_in": 3600}
+        tok = self.token or delegated_token(scopes[0], **self.claims)
+        return {"access_token": tok, "token_type": "Bearer", "expires_in": 3600}
 
 
 class StubAuth:
@@ -87,10 +94,11 @@ async def test_tokens_reach_only_the_users_file_and_are_deleted(make_client):
     sid = r.json()["sandbox_id"]
     # Root-owned file in a root-owned directory, readable by the user's private group only.
     assert backend.modes[(sid, env.obo_path)] == "640"
-    assert b"AT-https://graph.microsoft.com/.default" in backend.files[(sid, env.obo_path)]
+    token = delegated_token("https://graph.microsoft.com/.default")
+    assert token.encode() in backend.files[(sid, env.obo_path)]
     cmds = [c for _, c in backend.execs]
     # The token never appears in a command line (visible to other users via ps).
-    assert not any("AT-https" in c for c in cmds)
+    assert not any(token in c for c in cmds)
     run = next(c for c in cmds if "runuser" in c)
     assert f"OBO_TOKENS_FILE={env.obo_path}" in run
     # Root-owned directory, group-readable by the user only; root never chowns a path the
@@ -200,3 +208,52 @@ def test_obo_needs_unix_user_isolation_and_entra_auth():
         Config.model_validate({"backend": "fake", "auth": {"mode": "entra", "tenant_id": "t",
                                                            "audience": "a"},
                                "obo": {"enabled": True, "resources": {"g": ["s"]}}})
+
+
+# ---- the token handed to the agent must be this user's delegated token --------------------------
+
+WORKIQ = "api://workiq.svc.cloud.microsoft/WorkIQAgent.Ask"
+
+
+def workiq_cfg(**obo) -> Config:
+    return obo_cfg(obo={"enabled": True, "client_id": "cid", "resources": {"workiq": [WORKIQ]}, **obo},
+                   pool={"max_sandboxes": 2, "users_per_sandbox": 2,
+                         "egress": {"mode": "allowlist", "allow_hosts": ["workiq.svc.cloud.microsoft"]}})
+
+
+async def test_work_iq_gets_the_delegated_scope_and_the_users_own_token(make_client):
+    msal = FakeMsal()
+    client, backend = await make_client(workiq_cfg(), msal, Principal(TENANT, "o1", user_token()))
+    r = await client.post("/v1/agent/invoke", json={"prompt": "meetings?", "obo_resources": ["workiq"]})
+    assert r.status_code == 200
+    assert msal.calls[0][1] == [WORKIQ]
+    env = UserEnv(workiq_cfg(), Principal(TENANT, "o1").uid)
+    stored = [v for (s, p), v in backend.files.items() if p == env.obo_path][0]
+    assert delegated_token(WORKIQ).encode() in stored
+
+
+@pytest.mark.parametrize("claims, what", [
+    ({"scp": None, "roles": ["WorkIQ.Read.All"]}, "not a delegated"),       # application permission
+    ({"idtyp": "app"}, "not a delegated"),
+    ({"scp": None}, "not a delegated"),
+    ({"oid": "someone-else"}, "does not belong"),
+    ({"tid": "other-tenant"}, "does not belong"),
+])
+async def test_a_token_that_is_not_this_users_delegated_token_is_never_handed_over(make_client, claims, what):
+    client, backend = await make_client(workiq_cfg(), FakeMsal(claims=claims),
+                                        Principal(TENANT, "o1", user_token()))
+    r = await client.post("/v1/agent/invoke", json={"prompt": "x", "obo_resources": ["workiq"]})
+    assert r.status_code == 502 and what in r.json()["detail"]
+    assert backend.sandboxes == {} and backend.files == {}                  # no slot taken, nothing written
+
+
+async def test_opaque_tokens_fail_closed_unless_verification_is_turned_off(make_client):
+    client, backend = await make_client(workiq_cfg(), FakeMsal(token="opaque-token"),
+                                        Principal(TENANT, "o1", user_token()))
+    r = await client.post("/v1/agent/invoke", json={"prompt": "x", "obo_resources": ["workiq"]})
+    assert r.status_code == 502 and "verify_delegated" in r.json()["detail"]
+
+    client2, _ = await make_client(workiq_cfg(verify_delegated=False), FakeMsal(token="opaque-token"),
+                                   Principal(TENANT, "o1", user_token()))
+    assert (await client2.post("/v1/agent/invoke",
+                               json={"prompt": "x", "obo_resources": ["workiq"]})).status_code == 200
