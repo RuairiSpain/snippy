@@ -77,6 +77,26 @@ connectors:                    # connectors / MCP servers every sandbox in the p
   # config_file: /root/.copilot/mcp-config.json   # where the platform writes the MCP client config in the sandbox
   retire_grace_seconds: 3600   # after the list changes, old sandboxes are deleted once empty or after this long
 
+triggers:                      # run agents when connector events arrive. OFF: a developer must opt in
+  enabled: false               # env: SANDBOX_MUX_TRIGGERS_ENABLED. Needs auth.mode entra, unix_user isolation
+  # callback_audience: "api://sandbox-mux"        # audience of the namespace's token; defaults to auth.audience
+  # callback_principal_ids: ["<object id of the connector namespace's managed identity>"]
+  # sources:                   # what an admin has created on the namespace (python -m sandbox_mux.triggers_cli arm)
+  #   mailbox-support:
+  #     connector: office365
+  #     connection: o365-conn
+  #     operation: OnNewEmailV3
+  #     kind: email            # email | teams_message | generic. Field mappings for these are best guesses: check them
+  #     parameters: {folderPath: Inbox}
+  #     # fields: {from: from, subject: subject, body: bodyPreview}   # override with what the platform really sends
+  #     # allow_filters: [from, subject, importance]                  # what users may filter on
+  # max_subscriptions_per_user: 10
+  # max_runs_per_user_per_hour: 30
+  # delegation:                # run AS the user while they are away (stores an encrypted refresh token). Second opt-in
+  #   enabled: false           # env: SANDBOX_MUX_TRIGGERS_DELEGATION_ENABLED. Needs obo.enabled and TRIGGER_TOKEN_KEY
+  #   redirect_uri: https://agents.example.com/v1/triggers/consent/callback   # register it on the app registration
+  #   max_lifetime_days: 30    # then the user must consent again
+
 files:                         # upload inputs, download outputs; stored outside the sandboxes
   enabled: false               # needs isolation.mode: unix_user
   store: azure_blob            # azure_blob | local (local is for development)

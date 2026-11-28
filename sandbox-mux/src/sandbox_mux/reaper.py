@@ -20,10 +20,11 @@ log = logging.getLogger(__name__)
 class Reaper:
     def __init__(self, cfg: Config, store: Store, backend: SandboxBackend,
                  pool: PoolManager, service: SessionService, interval_s: float = 30.0,
-                 files=None) -> None:
+                 files=None, triggers=None) -> None:
         self.cfg, self.store, self.backend = cfg, store, backend
         self.pool, self.service, self.interval = pool, service, interval_s
         self.files = files
+        self.triggers = triggers
         self._token: str | None = None
         self._stop = asyncio.Event()
 
@@ -58,6 +59,9 @@ class Reaper:
         await self.reconcile_egress()
         await self.retire_stale_connections()
         await self.clean_up_retiring()
+        if self.triggers:
+            await self.triggers.requeue_stale()
+            await self.triggers.expire_subscriptions()
         if self.files:
             n = await self.files.purge_expired()
             if n:

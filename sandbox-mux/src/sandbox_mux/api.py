@@ -4,19 +4,21 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 import re
 from typing import Annotated
 
 import redis.asyncio as redis
-from fastapi import Depends, FastAPI, HTTPException, Path, Query, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi import Depends, FastAPI, Header, HTTPException, Path, Query, Request
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from . import telemetry
 from .auth import Authenticator, Principal, principal_dependency
 from .backends import make_backend
 from .blobs import make_blob_store
+from .delegation import DelegationError, DelegationService, TokenVault
 from .files import FILE_ID, FileError, FileService
 from .config import Config
 from .pool import PoolBusy, PoolManager
@@ -24,6 +26,7 @@ from .obo import OboBroker, OboError
 from .reaper import Reaper
 from .service import AgentError, SessionService, TurnInProgress
 from .store import Store
+from .triggers import SUB_ID, TriggerError, TriggerService
 
 log = logging.getLogger(__name__)
 CONV_ID = r"^[A-Za-z0-9_-]{1,64}$"
@@ -38,6 +41,22 @@ class InvokeRequest(BaseModel):
     inputs: list[Annotated[str, Field(pattern=FILE_ID)]] = Field(default_factory=list, max_length=50)
 
 
+class TriggerCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=80)
+    source: str = Field(..., pattern=r"^[a-z0-9][a-z0-9-]{0,40}$")
+    # e.g. {"from": ["alice@contoso.com", "@partner.com"], "subject_contains": ["invoice"]}
+    filters: dict[str, list[str]] = Field(default_factory=dict)
+    instruction: str = Field(..., min_length=1, max_length=4000)
+    # Aliases from obo.resources the agent may use as the user while they are away. Needs consent.
+    delegated_resources: list[str] = Field(default_factory=list, max_length=5)
+    expires_in_days: int | None = Field(None, ge=1, le=365)
+    include_own_messages: bool = False
+
+
+class ConsentStart(BaseModel):
+    resource: str = Field(..., pattern=r"^[A-Za-z0-9_-]{1,40}$")
+
+
 class InvokeResponse(BaseModel):
     conversation_id: str
     reply: str
@@ -48,7 +67,7 @@ class InvokeResponse(BaseModel):
 
 def create_app(cfg: Config | None = None, *, backend=None, redis_client=None,
                run_reaper: bool = True, obo_broker: OboBroker | None = None,
-               blob_store=None) -> FastAPI:
+               blob_store=None, msal_factory=None, vault: TokenVault | None = None) -> FastAPI:
     cfg = cfg or Config.load()
 
     @contextlib.asynccontextmanager
@@ -70,8 +89,21 @@ def create_app(cfg: Config | None = None, *, backend=None, redis_client=None,
             blobs = blob_store or make_blob_store(cfg.files)
             files = FileService(cfg, store, blobs)
         service = SessionService(cfg, store, b, pool, files)
-        reaper = Reaper(cfg, store, b, pool, service, files=files)
+        triggers = delegation = None
+        worker_tasks: list[asyncio.Task] = []
+        stop_workers = asyncio.Event()
+        if cfg.triggers.enabled:
+            if cfg.triggers.delegation.enabled:
+                delegation = DelegationService(
+                    cfg, store, vault or TokenVault.from_env(cfg.triggers.delegation.key_env),
+                    msal_factory)
+            triggers = TriggerService(cfg, store, service, delegation)
+            if run_reaper:       # workers run wherever the maintenance loop does (production)
+                worker_tasks = [asyncio.create_task(triggers.worker_loop(stop_workers))
+                                for _ in range(cfg.triggers.workers)]
+        reaper = Reaper(cfg, store, b, pool, service, files=files, triggers=triggers)
         app.state.ctx = dict(cfg=cfg, store=store, pool=pool, service=service, files=files,
+                             triggers=triggers, delegation=delegation,
                              obo=obo_broker or (OboBroker(cfg) if cfg.obo.enabled else None))
         app.state.auth = Authenticator(cfg.auth)
         task = asyncio.create_task(reaper.run()) if run_reaper else None
@@ -79,6 +111,10 @@ def create_app(cfg: Config | None = None, *, backend=None, redis_client=None,
             yield
         finally:
             reaper.stop()
+            stop_workers.set()
+            for w in worker_tasks:
+                w.cancel()
+            await asyncio.gather(*worker_tasks, return_exceptions=True)
             if task:
                 await task
             await b.close()
@@ -221,6 +257,11 @@ def create_app(cfg: Config | None = None, *, backend=None, redis_client=None,
         except FileError as e:
             raise HTTPException(e.status, e.detail) from e
 
+    # ---- triggers (registered only when a developer enables them in the config) ----------------------
+
+    if cfg.triggers.enabled:
+        _register_trigger_routes(app, cfg)
+
     @app.get("/healthz")
     async def healthz():
         return {"ok": True}
@@ -234,3 +275,139 @@ def create_app(cfg: Config | None = None, *, backend=None, redis_client=None,
         return {"ok": True}
 
     return app
+
+
+async def _read_json_limited(request: Request, limit: int):
+    declared = request.headers.get("content-length")
+    if declared and declared.isdigit() and int(declared) > limit:
+        raise HTTPException(413, "Payload too large")
+    total, chunks = 0, []
+    async for c in request.stream():
+        total += len(c)
+        if total > limit:
+            raise HTTPException(413, "Payload too large")
+        chunks.append(c)
+    try:
+        return json.loads(b"".join(chunks))
+    except ValueError:
+        raise HTTPException(400, "Body is not JSON") from None
+
+
+def _register_trigger_routes(app: FastAPI, cfg: Config) -> None:
+    t = cfg.triggers
+
+    def triggers() -> TriggerService:
+        return app.state.ctx["triggers"]
+
+    def delegation() -> DelegationService:
+        d = app.state.ctx["delegation"]
+        if d is None:
+            raise HTTPException(404, "Delegated triggers are not enabled")
+        return d
+
+    def fail(e: TriggerError | DelegationError) -> HTTPException:
+        return HTTPException(e.status, e.detail)
+
+    # The connector namespace calls this with its managed identity.
+    @app.post("/v1/triggers/callback/{source}")
+    async def callback(source: str, request: Request, authorization: str | None = Header(None)):
+        await app.state.auth.authenticate_service(
+            authorization, t.callback_audience or cfg.auth.audience, t.callback_principal_ids)
+        payload = await _read_json_limited(request, t.max_payload_bytes)
+        try:
+            return {"ok": True, **await triggers().handle_callback(source, payload)}
+        except TriggerError as e:
+            raise fail(e) from e
+
+    @app.get("/v1/triggers/sources")
+    async def sources(who: Principal = Depends(principal_dependency)):
+        return [{"source": n, "kind": s.kind, "filters": s.allow_filters or sorted(s.field_paths()),
+                 "text_filters": "add _contains to a field name, e.g. subject_contains"}
+                for n, s in t.sources.items()]
+
+    # Consent for unattended delegated access (option C). Declared before the {id} routes.
+    if t.delegation.enabled:
+        @app.post("/v1/triggers/consent/start")
+        async def consent_start(req: ConsentStart, who: Principal = Depends(principal_dependency)):
+            try:
+                return await delegation().start(who.uid, who.upn, req.resource)
+            except DelegationError as e:
+                raise fail(e) from e
+
+        @app.get("/v1/triggers/consent/callback", response_class=HTMLResponse)
+        async def consent_callback(request: Request):
+            # The browser lands here after the Microsoft sign-in page. No bearer token: the
+            # one-time `state` ties it to the user who started it, and the account that signs in
+            # must be that same user.
+            headers = {"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"}
+            try:
+                await delegation().complete(dict(request.query_params))
+            except DelegationError as e:
+                return HTMLResponse(f"<h1>Consent not saved</h1><p>{e.detail}</p>",
+                                    status_code=e.status, headers=headers)
+            return HTMLResponse("<h1>Consent saved</h1><p>You can close this window.</p>", headers=headers)
+
+        @app.get("/v1/triggers/consent")
+        async def consent_status(who: Principal = Depends(principal_dependency)):
+            s = await delegation().status(who.uid)
+            return {"resources": s["resources"], "expires_at": s["expires_at"]} if s else {"resources": []}
+
+        @app.delete("/v1/triggers/consent", status_code=204)
+        async def consent_revoke(who: Principal = Depends(principal_dependency)):
+            await delegation().revoke(who.uid)
+            await triggers().disable_delegated(who.uid, "Consent revoked")
+
+    else:
+        @app.api_route("/v1/triggers/consent", methods=["GET", "POST", "DELETE"])
+        @app.api_route("/v1/triggers/consent/{rest:path}", methods=["GET", "POST", "DELETE"])
+        async def consent_disabled(rest: str = ""):
+            raise HTTPException(404, "Delegated triggers are not enabled")
+
+    @app.post("/v1/triggers", status_code=201)
+    async def create_trigger(req: TriggerCreate, who: Principal = Depends(principal_dependency)):
+        try:
+            sub = await triggers().create(
+                who.uid, who.tenant_id, who.oid, who.upn, name=req.name, source=req.source,
+                filters=req.filters, instruction=req.instruction,
+                delegated_resources=req.delegated_resources, expires_in_days=req.expires_in_days,
+                include_own=req.include_own_messages)
+        except TriggerError as e:
+            raise fail(e) from e
+        return sub.public()
+
+    @app.get("/v1/triggers")
+    async def list_triggers(who: Principal = Depends(principal_dependency)):
+        return [s.public() for s in await triggers().list(who.uid)]
+
+    @app.get("/v1/triggers/{sub_id}")
+    async def get_trigger(sub_id: Annotated[str, Path(pattern=SUB_ID)],
+                          who: Principal = Depends(principal_dependency)):
+        try:
+            return (await triggers().get(who.uid, sub_id)).public()
+        except TriggerError as e:
+            raise fail(e) from e
+
+    @app.post("/v1/triggers/{sub_id}/{action}")
+    async def trigger_action(sub_id: Annotated[str, Path(pattern=SUB_ID)],
+                             action: Annotated[str, Path(pattern=r"^(enable|disable)$")],
+                             who: Principal = Depends(principal_dependency)):
+        try:
+            return (await triggers().set_state(who.uid, sub_id, action == "enable")).public()
+        except TriggerError as e:
+            raise fail(e) from e
+
+    @app.delete("/v1/triggers/{sub_id}", status_code=204)
+    async def delete_trigger(sub_id: Annotated[str, Path(pattern=SUB_ID)],
+                             who: Principal = Depends(principal_dependency)):
+        try:
+            await triggers().delete(who.uid, sub_id)
+        except TriggerError as e:
+            raise fail(e) from e
+
+    @app.get("/v1/triggers/{sub_id}/runs")
+    async def trigger_runs(sub_id: Annotated[str, Path(pattern=SUB_ID)],
+                           who: Principal = Depends(principal_dependency)):
+        try:
+            return await triggers().runs(who.uid, sub_id)
+        except TriggerError as e:
+            raise fail(e) from e

@@ -74,6 +74,99 @@ Idle compute cost is handled by the platform: each sandbox is created with
 `auto_suspend_seconds` and `auto_suspend_mode`, and `ensure_running` resumes it on demand.
 A shared sandbox only suspends when none of its users is active.
 
+## Triggers: run agents when connector events arrive
+
+**Off by default.** Nothing is exposed until a developer sets `triggers.enabled: true` (or
+`SANDBOX_MUX_TRIGGERS_ENABLED`) in the config, and running *as the user while they are away* is a second,
+separate switch, `triggers.delegation.enabled`. With triggers off, none of the routes below exist.
+
+```
+connector (Outlook, Teams, ...) -> connector namespace trigger -> POST /v1/triggers/callback/<source>
+   -> normalize + deduplicate -> subscriptions whose filters match -> queued runs
+   -> workers run the agent in the subscription owner's own sandbox user
+```
+
+**Two roles.**
+* **An admin** registers *sources* in `triggers.sources` (a connector, a connection, an operation) and creates
+  the matching trigger on the connector namespace. The service never calls the namespace itself, so your pipeline
+  stays in control of what is subscribed: `python -m sandbox_mux.triggers_cli arm --source mailbox-support
+  --callback-base-url https://agents.example.com` prints the `triggerConfigs` body (from Microsoft's
+  Azure/Connectors documentation, API `2026-05-01-preview`) and the `az rest` command. The namespace's managed
+  identity also needs access to the connection, and its object ID goes in `triggers.callback_principal_ids`.
+  Users cannot point a trigger at an arbitrary connection, so they cannot read other people's mailboxes.
+* **Users and code** subscribe to a source with filters and an instruction:
+
+```bash
+curl -X POST $HOST/v1/triggers -H "Authorization: Bearer $T" -H "Content-Type: application/json" -d '{
+  "name": "partner invoices", "source": "mailbox-support",
+  "filters": {"from": ["@partner.com"], "subject_contains": ["invoice", "overdue"], "importance": ["high"]},
+  "instruction": "Summarise the email and list the amounts due.",
+  "delegated_resources": []}'
+# also: GET /v1/triggers/sources, GET /v1/triggers, GET /v1/triggers/{id}, POST /v1/triggers/{id}/enable|disable,
+#       DELETE /v1/triggers/{id}, GET /v1/triggers/{id}/runs
+```
+
+Filters: every key must match, and any one value of a key is enough. `from` matches an address
+(`bob@partner.com`) or a domain written with the at-sign (`@partner.com`, not a bare domain); `<field>_contains` is
+a case-insensitive substring; anything else is an exact match. There are no regular expressions, so a user cannot
+write a pattern that stalls the callback. The owner's own messages never trigger their subscriptions unless
+`include_own_messages` is set, which stops reply loops.
+
+**What the callback does.** It accepts only a token from the namespace's managed identity: the right tenant, an
+object ID in `callback_principal_ids`, an application token (no `scp`). A user token is refused there, and
+the namespace's token is refused as a user. It caps the body size, drops events it has already seen, caps how
+many runs one event can start, acknowledges quickly, and leaves the work to the queue. The queue lives in Redis, so
+any replica's workers can take a run, a run left by a crashed worker is retried once and then failed, and a busy
+user or pool is retried a few times. Per user there is an hourly run limit and a cap on subscriptions, and a
+subscription that fails `max_consecutive_failures` times in a row is switched off.
+
+**The event is untrusted text, and an agent that reads someone else's email is a prompt-injection target.**
+The event reaches the agent in its own `event` field, never inside the instruction, with a note saying it is
+untrusted (`event(request)` in `runner/run_turn.py`). Text is stripped of control and invisible formatting
+characters (zero-width and bidirectional marks are used to hide instructions) and length-capped. Structure helps
+but does not make a model immune. For unattended runs, give the agent as little as it needs: no write-capable
+tools, no delegated resources unless required, and a human approval step before anything is sent or changed.
+
+**Running as the user while they are away (option C).** A trigger fires with no signed-in user, so there is no token
+to exchange. With `triggers.delegation.enabled`, a user consents once and the service keeps an encrypted refresh token:
+
+1. `POST /v1/triggers/consent/start {"resource": "graph"}` returns a Microsoft sign-in URL for one resource alias
+   from `obo.resources`. After the user signs in and consents, Microsoft redirects the browser to
+   `/v1/triggers/consent/callback`; the one-time `state` ties that to the user who started it, and the account that
+   signs in must be that same user or nothing is stored.
+2. A subscription with `"delegated_resources": ["graph"]` is accepted only for resources the user consented to.
+3. At run time the service gets an access token silently from the stored refresh token, checks it is that user's
+   delegated token (same check as OBO), hands it to the agent through the usual root-owned file, and deletes the file
+   after the run. Rotated refresh tokens are saved back.
+4. `GET /v1/triggers/consent` shows what is on file; `DELETE /v1/triggers/consent` deletes it and switches off every
+   delegated subscription. Consent expires after `max_lifetime_days` (default 30), and so do the subscriptions that use
+   it. If Microsoft stops honouring the token (revoked, password change, Conditional Access), the run fails, the
+   subscription is switched off with a reason, and the user consents again.
+
+This is the most sensitive thing in the project, because it keeps a long-lived credential for each user who opts in.
+What limits it: it is off unless a developer enables it; it needs the user's explicit consent per resource; the token
+cache is encrypted with a Fernet key from the environment (`TRIGGER_TOKEN_KEY`, comma-separated for rotation; generate
+one with `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"` and keep it in
+Key Vault, not in Redis or the config file); nothing is logged or returned; and it expires. The service will not start
+with delegation enabled and no key. Work IQ does not allow application-only access, so this is the only way for an
+unattended run to use it. Register the redirect URI on the app registration (web platform), with the delegated
+permissions for each resource and `offline_access`.
+
+**Not verified. Please test before relying on any of these:**
+* **Callback payloads.** The platform documentation does not describe what each connector sends to the callback. The
+  default field mappings for `email` (`from`, `subject`, `bodyPreview`, ...) and `teams_message` are guesses based on the
+  Office 365 and Teams connector shapes. Capture a real delivery and set `fields`, `unwrap` or `items_path` per source
+  (`generic` has no defaults).
+* **Namespace trigger creation, the access policy, and the managed-identity callback.** The body printed by `triggers_cli`
+  follows the documented shape but has not been run against a namespace. Polling triggers poll about every three minutes.
+* **The consent flow and silent token refresh against real Microsoft Entra.** Tested with a fake MSAL client and a real
+  token cache, not against a tenant. Whether Work IQ accepts tokens obtained from a refresh token is not documented.
+* **Connections for each user.** Sources are shared: an admin registers a mailbox or channel, and filters decide who is
+  interested. Per-user connections (a user consenting to their own mailbox) would add a connection-consent flow that I have
+  not verified, so they are not built.
+* **Results go nowhere but the run record.** `GET /v1/triggers/{id}/runs` shows the status, reply and any output files.
+  Sending a reply back to Teams or email would need a write-capable connector, which is deliberately not wired in.
+
 ## Images, the warm pool, and cold start
 
 **Is this Docker?** Partly. A sandbox boots from a *disk image*, which is its root filesystem, and
@@ -496,6 +589,7 @@ your subscription quota still cap the total.
 | `src/sandbox_mux/backends/fake.py` | In-memory backend for tests and local dev |
 | `src/sandbox_mux/config.py` (`connectors`) | Which connectors and MCP servers each sandbox is created with |
 | `src/sandbox_mux/files.py`, `blobs.py` | User files: quota, names, safe archive handling; Azure Blob and local stores |
+| `src/sandbox_mux/triggers.py`, `delegation.py`, `triggers_cli.py` | Connector-event triggers, subscriptions and runs; consent and the encrypted token vault; the admin command |
 | `src/sandbox_mux/obo.py` | Entra On-Behalf-Of exchange |
 | `src/sandbox_mux/api.py` | FastAPI app: invoke, history, end session, pool status |
 | `src/sandbox_mux/image.py`, `runner/Dockerfile` | Build the sandbox disk image from a container image, from CI |

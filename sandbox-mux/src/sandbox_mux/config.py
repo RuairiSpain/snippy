@@ -39,6 +39,83 @@ def parse_cpu(text: str) -> float:
     return float(t[:-1]) / 1000 if t.endswith("m") else float(t)
 
 
+# What each kind of source is assumed to deliver, as dotted paths into one event. The platform
+# docs do not describe callback payloads, so these are best guesses for the Office 365 and Teams
+# connectors. Override per source with `fields` and check against a real delivery before use.
+KIND_FIELDS: dict[str, dict[str, str]] = {
+    "email": {"id": "id", "from": "from", "subject": "subject", "body": "bodyPreview",
+              "importance": "importance", "has_attachments": "hasAttachments",
+              "received": "receivedDateTime"},
+    "teams_message": {"id": "id", "from": "from.user.displayName", "text": "body.content",
+                      "chat": "chatId"},
+    "generic": {},
+}
+
+
+class TriggerSource(BaseModel):
+    """One connector event the service accepts. An admin creates the matching trigger on the
+    connector namespace (`python -m sandbox_mux.triggers_cli arm`); users only subscribe."""
+
+    connector: str = Field(..., min_length=1)       # e.g. office365
+    connection: str = Field(..., min_length=1)      # the namespace connection to watch
+    operation: str = Field(..., min_length=1)       # e.g. OnNewEmailV3
+    kind: Literal["email", "teams_message", "generic"] = "generic"
+    parameters: dict[str, object] = {}              # fixed parameters of the namespace trigger
+    unwrap: str | None = None                       # path to the event inside the payload
+    items_path: str | None = None                   # path to a list of events, if batched
+    fields: dict[str, str] = {}                     # normalized field -> path; overrides the kind's
+    allow_filters: list[str] = []                   # filter keys users may use; empty = any field
+
+    def field_paths(self) -> dict[str, str]:
+        return {**KIND_FIELDS[self.kind], **self.fields}
+
+
+class DelegationConfig(BaseModel):
+    """Run triggers as the user (option C): the user consents once, and an encrypted refresh
+    token is kept so the service can get delegated tokens while the user is away."""
+
+    enabled: bool = False
+    redirect_uri: str = ""                          # must be registered on the app registration
+    max_lifetime_days: int = Field(30, ge=1, le=90)  # then the user must consent again
+    key_env: str = Field("TRIGGER_TOKEN_KEY", pattern=r"^[A-Z][A-Z0-9_]*$")  # holds Fernet key(s)
+
+
+class TriggersConfig(BaseModel):
+    """Run agents when connector events arrive. Off unless a developer enables it here."""
+
+    enabled: bool = False
+    # Audience of the Entra token the namespace sends to the callback (its trigger's
+    # authentication.audience). Defaults to auth.audience.
+    callback_audience: str | None = None
+    # Object IDs of the namespace's managed identity. Only these may call the callback.
+    callback_principal_ids: list[str] = []
+    sources: dict[str, TriggerSource] = {}
+    max_subscriptions_per_user: int = Field(10, ge=1)
+    max_runs_per_user_per_hour: int = Field(30, ge=1)
+    max_payload_bytes: int = Field(262_144, ge=1024)
+    max_events_per_callback: int = Field(50, ge=1)
+    max_runs_per_event: int = Field(100, ge=1)      # fan-out cap
+    dedup_ttl_seconds: int = Field(86_400, ge=60)
+    workers: int = Field(2, ge=1)
+    max_attempts: int = Field(3, ge=1)               # retries when the user or pool is busy
+    max_consecutive_failures: int = Field(5, ge=1)   # then the subscription is disabled
+    field_max_chars: int = Field(20_000, ge=100)     # per event field passed to the agent
+    delegation: DelegationConfig = DelegationConfig()
+
+    @model_validator(mode="after")
+    def _check(self) -> "TriggersConfig":
+        for name in self.sources:
+            if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,40}", name):
+                raise ValueError(f"triggers.sources: invalid source name {name!r}")
+        if self.enabled:
+            if not self.sources:
+                raise ValueError("triggers.enabled needs at least one entry in triggers.sources")
+            if not self.callback_principal_ids:
+                raise ValueError("triggers.callback_principal_ids is required: the object ID of the "
+                                 "connector namespace's managed identity")
+        return self
+
+
 class FilesConfig(BaseModel):
     """Upload of input files and download of output files, kept in storage that outlives
     sandboxes. Sizes accept 100MB, 100Mi, 2GB, or a number of bytes."""
@@ -388,6 +465,7 @@ class Config(BaseModel):
     isolation: IsolationConfig = IsolationConfig()
     limits: LimitsConfig = LimitsConfig()
     connectors: ConnectorsConfig = ConnectorsConfig()
+    triggers: TriggersConfig = TriggersConfig()
     files: FilesConfig = FilesConfig()
     agent: AgentConfig = AgentConfig()
     auth: AuthConfig = AuthConfig(mode="dev")
@@ -401,6 +479,24 @@ class Config(BaseModel):
                        if not getattr(self.azure, k)]
             if missing:
                 raise ValueError(f"azure.{', azure.'.join(missing)} required when backend is azure")
+        t = self.triggers
+        if t.enabled:
+            if self.auth.mode != "entra":
+                raise ValueError("triggers.enabled requires auth.mode: entra")
+            if self.isolation.mode != "unix_user":
+                raise ValueError("triggers.enabled requires isolation.mode: unix_user")
+            for name, src in t.sources.items():
+                bad = [f for f in src.allow_filters if f not in src.field_paths()]
+                if bad:
+                    raise ValueError(f"triggers.sources.{name}.allow_filters names unknown fields: {bad}")
+        if t.delegation.enabled:
+            if not t.enabled:
+                raise ValueError("triggers.delegation.enabled requires triggers.enabled")
+            if not self.obo.enabled:
+                raise ValueError("triggers.delegation.enabled requires obo.enabled (it reuses the "
+                                 "app registration and resource aliases)")
+            if not t.delegation.redirect_uri.startswith(("https://", "http://localhost")):
+                raise ValueError("triggers.delegation.redirect_uri must be https (or http://localhost)")
         if self.connectors.config_file and self.isolation.mode != "unix_user":
             raise ValueError("connectors.config_file requires isolation.mode: unix_user")
         if self.files.enabled and self.isolation.mode != "unix_user":
@@ -466,6 +562,8 @@ ENV_ALIASES: dict[str, str] = {
     "CPU": "pool.cpu",
     "MEMORY": "pool.memory",
     "DISK_SIZE": "pool.disk_size",
+    "TRIGGERS_ENABLED": "triggers.enabled",
+    "TRIGGERS_DELEGATION_ENABLED": "triggers.delegation.enabled",
     "CONNECTORS": "connectors.attach",
     "CONNECTOR_RETIRE_GRACE_SECONDS": "connectors.retire_grace_seconds",
     "FILES_ENABLED": "files.enabled",

@@ -73,6 +73,34 @@ def check_delegated(token: str, alias: str, tenant_id: str, oid: str) -> None:
         raise OboError(502, f"The '{alias}' token does not belong to the signed-in user")
 
 
+def make_msal_app(cfg: Config, token_cache: Any = None):
+    """The confidential client for the app registration behind auth.audience."""
+    import msal
+
+    o = cfg.obo
+    credential: Any
+    if o.credential == "secret":
+        credential = os.environ.get("OBO_CLIENT_SECRET")
+        if not credential:
+            raise RuntimeError("OBO_CLIENT_SECRET is not set")
+    elif o.credential == "certificate":
+        with open(o.certificate_path, encoding="utf-8") as f:  # type: ignore[arg-type]
+            key = f.read()
+        credential = {"private_key": key, "public_certificate": key}
+        if o.certificate_thumbprint:
+            credential["thumbprint"] = o.certificate_thumbprint
+    else:  # managed_identity: federated credential, no secret to store or rotate
+        from azure.identity import ManagedIdentityCredential
+
+        mi = ManagedIdentityCredential()
+        credential = {"client_assertion": lambda: mi.get_token(
+            "api://AzureADTokenExchange/.default").token}
+    return msal.ConfidentialClientApplication(
+        o.client_id,
+        authority=f"https://login.microsoftonline.com/{cfg.auth.tenant_id}",
+        client_credential=credential, token_cache=token_cache)
+
+
 class OboBroker:
     def __init__(self, cfg: Config, app_factory: Callable[[], Any] | None = None) -> None:
         self.cfg = cfg
@@ -80,31 +108,7 @@ class OboBroker:
         self._app: Any = None
 
     def _msal_app(self):
-        import msal
-
-        o = self.cfg.obo
-        credential: Any
-        if o.credential == "secret":
-            credential = os.environ.get("OBO_CLIENT_SECRET")
-            if not credential:
-                raise RuntimeError("OBO_CLIENT_SECRET is not set")
-        elif o.credential == "certificate":
-            with open(o.certificate_path, encoding="utf-8") as f:  # type: ignore[arg-type]
-                key = f.read()
-            credential = {"private_key": key, "public_certificate": key}
-            if o.certificate_thumbprint:
-                credential["thumbprint"] = o.certificate_thumbprint
-        else:  # managed_identity: federated credential, no secret to store or rotate
-            from azure.identity import ManagedIdentityCredential
-
-            mi = ManagedIdentityCredential()
-            credential = {"client_assertion": lambda: mi.get_token(
-                "api://AzureADTokenExchange/.default").token}
-        return msal.ConfidentialClientApplication(
-            o.client_id,
-            authority=f"https://login.microsoftonline.com/{self.cfg.auth.tenant_id}",
-            client_credential=credential,
-        )
+        return make_msal_app(self.cfg)
 
     @property
     def app(self):

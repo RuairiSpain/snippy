@@ -195,7 +195,8 @@ class SessionService:
 
     async def run_turn(self, uid: str, conversation_id: str, prompt: str,
                        obo_tokens: dict | None = None,
-                       inputs: list[FileRecord] | None = None) -> TurnResult:
+                       inputs: list[FileRecord] | None = None,
+                       event: dict | None = None) -> TurnResult:
         s = self.cfg.session
         # Turns stay inside the sandbox timeout plus margin for provisioning and resume.
         lock_ttl = s.turn_timeout_seconds + self.cfg.pool.create_timeout_seconds + 60
@@ -211,7 +212,7 @@ class SessionService:
                 for attempt in (1, 2):
                     try:
                         return await self._turn(uid, conversation_id, prompt, span, obo_tokens,
-                                                inputs or [])
+                                                inputs or [], event)
                     except SandboxGone as e:
                         # The sandbox disappeared. Its users' homes went with it; forget it and
                         # place the user again once.
@@ -235,7 +236,8 @@ class SessionService:
 
     async def _turn(self, uid: str, conv: str, prompt: str, span,
                     obo_tokens: dict | None = None,
-                    inputs: list[FileRecord] | None = None) -> TurnResult:
+                    inputs: list[FileRecord] | None = None,
+                    event: dict | None = None) -> TurnResult:
         s = self.cfg.session
         inputs = inputs or []
         t0 = time.monotonic()
@@ -263,6 +265,10 @@ class SessionService:
             request = {"conversation_id": conv, "messages": [*history, user_msg]}
             if staged:
                 request["input_files"] = staged
+            if event is not None:
+                # Untrusted content from outside (an email, a chat message). It travels in its
+                # own field, never inside the instruction.
+                request["event"] = event
             await self.backend.write_file(sid, env.request_path, json.dumps(request).encode(),
                                           mode="640")
             if obo_tokens:

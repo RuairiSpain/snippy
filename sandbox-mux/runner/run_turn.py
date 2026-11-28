@@ -44,6 +44,16 @@ def mcp_config() -> dict | None:
         return json.load(f)
 
 
+def event(request: dict) -> dict | None:
+    """The connector event that started this run (an email, a chat message), if any.
+
+    UNTRUSTED: someone outside your organization may have written it. It is data to analyse,
+    never instructions to follow. Keep it out of the system prompt, quote it as data when you
+    show it to a model, and do not let it choose which tools to run or where to send results.
+    `event["fields"]` has the normalized values (from, subject, body, ...)."""
+    return request.get("event")
+
+
 def input_files(request: dict) -> list[dict]:
     """Files the caller attached to this request, if any. Each has `name`, `path`, `size`,
     `sha256` and `content_type`. They are read-only and live in $INPUT_DIR for this turn

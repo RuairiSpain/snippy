@@ -13,6 +13,11 @@ from .config import AuthConfig
 from .obo import OboError, check_same_user, extract_assertion
 
 
+def uid_for(tenant_id: str, oid: str) -> str:
+    """Stable pseudonymous user key for a (tenant, object id)."""
+    return hashlib.sha256(f"{tenant_id}:{oid}".encode()).hexdigest()[:32]
+
+
 @dataclass(frozen=True)
 class Principal:
     tenant_id: str
@@ -20,12 +25,13 @@ class Principal:
     # The caller's token, kept only for the On-Behalf-Of exchange. Excluded from repr and
     # equality so it cannot leak through logging.
     assertion: str | None = field(default=None, repr=False, compare=False)
+    upn: str | None = field(default=None, compare=False)      # sign-in name, for display only
 
     @property
     def uid(self) -> str:
         """Stable pseudonymous key. Never derived from anything the caller can choose
         independently of the verified token."""
-        return hashlib.sha256(f"{self.tenant_id}:{self.oid}".encode()).hexdigest()[:32]
+        return uid_for(self.tenant_id, self.oid)
 
 
 class Authenticator:
@@ -37,6 +43,19 @@ class Authenticator:
                 f"https://login.microsoftonline.com/{cfg.tenant_id}/discovery/v2.0/keys",
                 cache_keys=True)
 
+    async def _verify(self, token: str, audience: str) -> dict:
+        try:
+            # PyJWKClient does blocking HTTP on a cache miss, so keep it off the event loop.
+            key = await asyncio.to_thread(self._jwks.get_signing_key_from_jwt, token)  # type: ignore[union-attr]
+            return jwt.decode(
+                token, key.key, algorithms=["RS256"], audience=audience,
+                issuer=[f"https://login.microsoftonline.com/{self.cfg.tenant_id}/v2.0",
+                        f"https://sts.windows.net/{self.cfg.tenant_id}/"],
+                options={"require": ["exp", "iss", "aud"]},
+            )
+        except jwt.PyJWTError as e:
+            raise HTTPException(401, f"Invalid token: {type(e).__name__}") from e
+
     async def authenticate(self, authorization: str | None, dev_user: str | None,
                            assertion: str | None = None) -> Principal:
         if self.cfg.mode == "dev":
@@ -46,27 +65,34 @@ class Authenticator:
         if not authorization or not authorization.lower().startswith("bearer "):
             raise HTTPException(401, "Bearer token required")
         token = authorization[7:].strip()
-        try:
-            # PyJWKClient does blocking HTTP on a cache miss, so keep it off the event loop.
-            key = await asyncio.to_thread(self._jwks.get_signing_key_from_jwt, token)  # type: ignore[union-attr]
-            claims = jwt.decode(
-                token, key.key, algorithms=["RS256"], audience=self.cfg.audience,
-                issuer=[f"https://login.microsoftonline.com/{self.cfg.tenant_id}/v2.0",
-                        f"https://sts.windows.net/{self.cfg.tenant_id}/"],
-                options={"require": ["exp", "iss", "aud"]},
-            )
-        except jwt.PyJWTError as e:
-            raise HTTPException(401, f"Invalid token: {type(e).__name__}") from e
+        claims = await self._verify(token, self.cfg.audience)
         oid, tid = claims.get("oid"), claims.get("tid")
         if not oid or tid != self.cfg.tenant_id:
             raise HTTPException(401, "Token has no oid or belongs to another tenant")
+        if "scp" not in claims or claims.get("idtyp") == "app":
+            # Only delegated user tokens are users. A managed identity's token (such as the
+            # connector namespace calling the trigger callback) is not a user.
+            raise HTTPException(401, "A delegated user token is required")
         if assertion and assertion != token:
             # Delegation token supplied in a different header: it must be the same user's.
             try:
                 check_same_user(assertion, tid, oid)
             except OboError as e:
                 raise HTTPException(e.status, e.detail) from e
-        return Principal(tid, oid, assertion=assertion or token)
+        return Principal(tid, oid, assertion=assertion or token,
+                         upn=claims.get("preferred_username") or claims.get("upn"))
+
+    async def authenticate_service(self, authorization: str | None, audience: str,
+                                   allowed_oids: list[str]) -> dict:
+        """The connector namespace's managed identity calling a trigger callback. It must be
+        an app token (no `scp`) for `audience` from one of the allowed object IDs."""
+        if not authorization or not authorization.lower().startswith("bearer "):
+            raise HTTPException(401, "Bearer token required")
+        claims = await self._verify(authorization[7:].strip(), audience)
+        if claims.get("tid") != self.cfg.tenant_id or claims.get("oid") not in allowed_oids \
+                or "scp" in claims:
+            raise HTTPException(403, "Caller is not an allowed identity")
+        return claims
 
 
 async def principal_dependency(request: Request,
