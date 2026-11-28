@@ -130,6 +130,44 @@ characters (zero-width and bidirectional marks are used to hide instructions) an
 but does not make a model immune. For unattended runs, give the agent as little as it needs: no write-capable
 tools, no delegated resources unless required, and a human approval step before anything is sent or changed.
 
+**A separate pool for triggered runs.** Triggered work runs in its own pool by default, because a run started
+by text from outside must not share a sandbox with interactive sessions:
+
+```yaml
+triggers:
+  pool:
+    name: triggers              # its own sandboxes, label and Redis namespace
+    settings:
+      max_sandboxes: 3
+      egress: {mode: allowlist, allow_hosts: ["workiq.svc.cloud.microsoft"]}
+    limits: {mode: cgroup, cpu: 0.5, memory: 1Gi, pids: 128}      # optional
+```
+
+* **Different machines, so different homes.** A user's triggered run and their interactive session never share a
+  sandbox, a Unix account or a home directory. An injected run cannot read the user's interactive files, plant
+  instructions the interactive agent will later trust, or reach another interactive user's processes, localhost
+  services or tokens: those are on other sandboxes, behind the hypervisor boundary.
+* **Safe by default.** The triggers pool inherits sizes, the image, timeouts and warm-up from `pool`, but **not** the egress
+  policy (it starts as deny-all) and **not** the connectors (none). You add only what triggered runs need. Per-user limits
+  are inherited unless you set `triggers.pool.limits`. With delegation on, deny-all is refused at startup, because a
+  delegated run must be able to reach the API: allow that one host.
+* **Separate capacity.** A flood of events cannot take interactive slots, and a full interactive pool does not stop
+  triggered runs. Each pool has its own per-user lock, so a running interactive turn does not block a triggered one.
+  The queue itself is still shared by all triggered runs.
+* **One deployment.** Both pools run in the same service with their own maintenance loop, idle eviction, egress and
+  connector reconciliation, warm pool and retirement. `DELETE /v1/me/session` removes the user from both pools.
+  `GET /v1/pool/status` (admins) shows both. `triggers.pool.separate: false` shares the interactive pool instead.
+* **What is still shared:** the sandbox group, its managed identity and its connector attachments (so keep the identity's
+  roles minimal; the connector set is chosen per pool), the quota (`maxSandboxCount` on the group must cover both pools'
+  `max_sandboxes`), Redis, the file store and the delegation vault.
+
+Choosing the egress profile for the triggers pool. All three keep the agent off the open internet:
+connector tools only (allow the connector gateway host); plus Work IQ as the user (add `workiq.svc.cloud.microsoft`);
+plus another Azure service (add that one host, and keep the identity's roles minimal). Whether traffic to the connector
+gateway needs an allow rule is not documented: with a deny policy, call the connector's runtime URL from inside a
+triggers-pool sandbox and check its egress decisions, then allow only what the audit shows. Raw TCP and UDP may not be
+covered by a deny policy unless you set `egress.block_non_http`; test that before treating the pool as sealed.
+
 **Running as the user while they are away (option C).** A trigger fires with no signed-in user, so there is no token
 to exchange. With `triggers.delegation.enabled`, a user consents once and the service keeps an encrypted refresh token:
 

@@ -29,6 +29,11 @@ class SandboxBackend(Protocol):
 
     async def close(self) -> None: ...
 
+    def with_config(self, cfg) -> "SandboxBackend":
+        """A view of this backend that creates and updates sandboxes with another pool's settings
+        (size, image, egress, connectors). It shares the connection; only the original is
+        started and closed."""
+
     async def create(self, labels: dict[str, str]) -> str:
         """Create a sandbox, wait until it is Running, return its id."""
 

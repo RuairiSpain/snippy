@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import re
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -82,6 +82,23 @@ class DelegationConfig(BaseModel):
     key_env: str = Field("TRIGGER_TOKEN_KEY", pattern=r"^[A-Z][A-Z0-9_]*$")  # holds Fernet key(s)
 
 
+class TriggerPoolConfig(BaseModel):
+    """Where triggered runs execute. By default a second pool with its own sandboxes, because a
+    triggered run is started by text from outside and must not share a sandbox, a home directory,
+    an egress policy or a connector set with interactive sessions.
+
+    What it inherits from `pool`: sizes, image, timeouts and the like. What it does NOT inherit,
+    because the safe choice is the empty one: the egress policy (deny all, until you allow the few
+    hosts a run needs) and the connectors (none). Per-user limits are inherited unless set here.
+    """
+
+    separate: bool = True              # False shares the interactive pool: not recommended
+    name: str = Field("triggers", pattern=r"^[a-z0-9][a-z0-9-]{0,40}$")
+    settings: dict[str, Any] = {}      # PoolConfig fields to override, e.g. max_sandboxes, egress
+    limits: "LimitsConfig | None" = None
+    connectors: "ConnectorsConfig | None" = None
+
+
 class TriggersConfig(BaseModel):
     """Run agents when connector events arrive. Off unless a developer enables it here."""
 
@@ -102,6 +119,7 @@ class TriggersConfig(BaseModel):
     max_attempts: int = Field(3, ge=1)               # retries when the user or pool is busy
     max_consecutive_failures: int = Field(5, ge=1)   # then the subscription is disabled
     field_max_chars: int = Field(20_000, ge=100)     # per event field passed to the agent
+    pool: TriggerPoolConfig = Field(default_factory=lambda: TriggerPoolConfig())
     delegation: DelegationConfig = DelegationConfig()
 
     @model_validator(mode="after")
@@ -459,6 +477,10 @@ class RedisConfig(BaseModel):
         return url
 
 
+TriggerPoolConfig.model_rebuild()
+TriggersConfig.model_rebuild()
+
+
 class Config(BaseModel):
     azure: AzureConfig = AzureConfig()
     backend: Literal["azure", "fake"] = "azure"
@@ -491,6 +513,7 @@ class Config(BaseModel):
                 bad = [f for f in src.allow_filters if f not in src.field_paths()]
                 if bad:
                     raise ValueError(f"triggers.sources.{name}.allow_filters names unknown fields: {bad}")
+            self.triggers_pool_cfg()        # raises if the triggers pool settings are invalid
         if t.delegation.enabled:
             if not t.enabled:
                 raise ValueError("triggers.delegation.enabled requires triggers.enabled")
@@ -521,8 +544,34 @@ class Config(BaseModel):
             if self.pool.egress.mode == "disabled":
                 raise ValueError("obo.enabled is pointless with pool.egress.mode: disabled, the "
                                  "agent could not reach the downstream APIs. Use allowlist and "
-                                 "list their hosts.")
+                                 "list their hosts (for the triggers pool: triggers.pool.settings.egress).")
         return self
+
+    def triggers_pool_cfg(self) -> "Config":
+        """The configuration of the pool that runs triggered work: this one with the triggers
+        pool's settings applied. Returns `self` when triggers are off or share the interactive pool.
+        Egress and connectors start empty (see TriggerPoolConfig)."""
+        tp = self.triggers.pool
+        if not self.triggers.enabled or not tp.separate:
+            return self
+        if tp.name == self.pool.name:
+            raise ValueError("triggers.pool.name must differ from pool.name, or the two pools "
+                             "would share sandboxes and state")
+        pool = self.pool.model_dump(mode="python")
+        pool["egress"] = EgressConfig().model_dump()            # deny all: not inherited
+        pool.update(tp.settings)
+        pool["name"] = tp.name
+        data = self.model_dump(mode="python")
+        data["pool"] = pool
+        data["limits"] = (tp.limits or self.limits).model_dump()
+        data["connectors"] = (tp.connectors or ConnectorsConfig()).model_dump()
+        data["triggers"]["pool"] = {"separate": False, "name": tp.name}
+        if not self.triggers.delegation.enabled:
+            data["obo"] = OboConfig().model_dump()               # no tokens go to this pool
+        try:
+            return Config.model_validate(data)
+        except ValueError as e:
+            raise ValueError(f"triggers.pool: {e}") from None
 
     def overcommit(self) -> dict[str, float]:
         """Ratio of (per-user limit x users_per_sandbox) to the sandbox size. Above 1 the limits

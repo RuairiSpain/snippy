@@ -73,23 +73,38 @@ def create_app(cfg: Config | None = None, *, backend=None, redis_client=None,
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI):
         telemetry.setup()
-        for what, ratio in cfg.overcommit().items():
-            if ratio > 1:
-                log.warning("per-user %s limits add up to %.1fx the sandbox size at %d users: a "
-                            "full sandbox can still run out. Lower limits.%s or users_per_sandbox.",
-                            what, ratio, cfg.pool.users_per_sandbox, what)
+        pool_cfg_for_trigger = cfg.triggers_pool_cfg()
+        for c in {id(x): x for x in (cfg, pool_cfg_for_trigger)}.values():
+            for what, ratio in c.overcommit().items():
+                if ratio > 1:
+                    log.warning("pool %s: per-user %s limits add up to %.1fx the sandbox size at %d "
+                                "users: a full sandbox can still run out. Lower limits.%s or "
+                                "users_per_sandbox.", c.pool.name, what, ratio,
+                                c.pool.users_per_sandbox, what)
         r = redis_client or redis.from_url(cfg.redis.resolved_url())
         b = backend or make_backend(cfg)
         await b.start()
         store = Store(r, cfg.redis.key_prefix, cfg.pool.name)
-        pool = PoolManager(cfg, store, b)
+        main_b = b.with_config(cfg)      # each pool talks to the shared connection with its own settings
+        pool = PoolManager(cfg, store, main_b)
         blobs = None
         files = None
         if cfg.files.enabled:
             blobs = blob_store or make_blob_store(cfg.files)
             files = FileService(cfg, store, blobs)
-        service = SessionService(cfg, store, b, pool, files)
+        service = SessionService(cfg, store, main_b, pool, files)
         triggers = delegation = None
+        # Triggered runs get their own pool (own sandboxes, egress, connectors, limits) unless
+        # triggers.pool.separate is false. Same backend connection, separate settings and state.
+        trigger_service, trigger_pool, trigger_reaper, trigger_store = service, pool, None, store
+        if pool_cfg_for_trigger is not cfg:
+            trigger_store = Store(r, cfg.redis.key_prefix, pool_cfg_for_trigger.pool.name)
+            trigger_backend = b.with_config(pool_cfg_for_trigger)
+            trigger_pool = PoolManager(pool_cfg_for_trigger, trigger_store, trigger_backend)
+            trigger_service = SessionService(pool_cfg_for_trigger, trigger_store, trigger_backend,
+                                             trigger_pool, files)
+            trigger_reaper = Reaper(pool_cfg_for_trigger, trigger_store, trigger_backend,
+                                    trigger_pool, trigger_service)
         worker_tasks: list[asyncio.Task] = []
         stop_workers = asyncio.Event()
         if cfg.triggers.enabled:
@@ -97,26 +112,34 @@ def create_app(cfg: Config | None = None, *, backend=None, redis_client=None,
                 delegation = DelegationService(
                     cfg, store, vault or TokenVault.from_env(cfg.triggers.delegation.key_env),
                     msal_factory)
-            triggers = TriggerService(cfg, store, service, delegation)
+            triggers = TriggerService(cfg, store, trigger_service, delegation)
             if run_reaper:       # workers run wherever the maintenance loop does (production)
                 worker_tasks = [asyncio.create_task(triggers.worker_loop(stop_workers))
                                 for _ in range(cfg.triggers.workers)]
-        reaper = Reaper(cfg, store, b, pool, service, files=files, triggers=triggers)
+        reaper = Reaper(cfg, store, main_b, pool, service, files=files, triggers=triggers)
         app.state.ctx = dict(cfg=cfg, store=store, pool=pool, service=service, files=files,
-                             triggers=triggers, delegation=delegation,
+                             triggers=triggers, delegation=delegation, trigger_service=trigger_service,
+                             trigger_pool=trigger_pool, trigger_store=trigger_store,
+                             trigger_reaper=trigger_reaper, reaper=reaper,
                              obo=obo_broker or (OboBroker(cfg) if cfg.obo.enabled else None))
         app.state.auth = Authenticator(cfg.auth)
         task = asyncio.create_task(reaper.run()) if run_reaper else None
+        trigger_task = (asyncio.create_task(trigger_reaper.run())
+                        if run_reaper and trigger_reaper else None)
         try:
             yield
         finally:
             reaper.stop()
+            if trigger_reaper:
+                trigger_reaper.stop()
             stop_workers.set()
             for w in worker_tasks:
                 w.cancel()
             await asyncio.gather(*worker_tasks, return_exceptions=True)
             if task:
                 await task
+            if trigger_task:
+                await trigger_task
             await b.close()
             if blobs:
                 await blobs.close()
@@ -184,6 +207,9 @@ def create_app(cfg: Config | None = None, *, backend=None, redis_client=None,
         """Release the caller's slot and delete their home directory in the sandbox."""
         try:
             await svc().end_session(who.uid)
+            ts = app.state.ctx["trigger_service"]
+            if ts is not svc():                 # also delete what a triggered run left in its pool
+                await ts.end_session(who.uid)
         except TurnInProgress:
             raise HTTPException(409, "A turn is running for this user")
 
@@ -191,11 +217,17 @@ def create_app(cfg: Config | None = None, *, backend=None, redis_client=None,
     async def pool_status(who: Principal = Depends(principal_dependency)):
         if who.oid not in cfg.auth.admin_oids and cfg.auth.mode != "dev":
             raise HTTPException(403)
-        st = app.state.ctx["store"]
-        return {"loads": await st.loads(), "states": await st.states(),
-                "creating": await st.creating_count(), "waiting": await st.waiting_count(),
-                "users_per_sandbox": cfg.pool.users_per_sandbox,
-                "max_sandboxes": cfg.pool.max_sandboxes}
+        async def one(st, c):
+            return {"pool": c.pool.name, "loads": await st.loads(), "states": await st.states(),
+                    "creating": await st.creating_count(), "waiting": await st.waiting_count(),
+                    "users_per_sandbox": c.pool.users_per_sandbox,
+                    "max_sandboxes": c.pool.max_sandboxes, "egress": c.pool.egress.mode,
+                    "connectors": len(c.connectors.ids)}
+        out = await one(app.state.ctx["store"], cfg)
+        ts = app.state.ctx["trigger_store"]
+        if ts is not app.state.ctx["store"]:
+            out["triggers_pool"] = await one(ts, cfg.triggers_pool_cfg())
+        return out
 
     # ---- files --------------------------------------------------------------------------------
 

@@ -6,6 +6,7 @@ that imports it.
 
 from __future__ import annotations
 
+import copy
 import datetime as dt
 import logging
 
@@ -64,8 +65,16 @@ class AzureSandboxBackend:
         self._cfg = cfg
         self._credential: DefaultAzureCredential | None = None
         self._client: SandboxGroupClient | None = None
+        self._view = False
+
+    def with_config(self, cfg: Config) -> "AzureSandboxBackend":
+        v = copy.copy(self)          # shares the client and credential
+        v._cfg, v._view = cfg, True
+        return v
 
     async def start(self) -> None:
+        if self._view:
+            return
         a = self._cfg.azure
         self._credential = DefaultAzureCredential()
         self._client = SandboxGroupClient(
@@ -78,6 +87,8 @@ class AzureSandboxBackend:
         await self._client.__aenter__()
 
     async def close(self) -> None:
+        if self._view:
+            return
         if self._client:
             await self._client.close()
         if self._credential:

@@ -90,6 +90,17 @@ triggers:                      # run agents when connector events arrive. OFF: a
   #     parameters: {folderPath: Inbox}
   #     # fields: {from: from, subject: subject, body: bodyPreview}   # override with what the platform really sends
   #     # allow_filters: [from, subject, importance]                  # what users may filter on
+  # pool:                      # where triggered runs execute: a SECOND pool, with its own sandboxes
+  #   separate: true           # (false shares the interactive pool: not recommended)
+  #   name: triggers           # label and Redis namespace; must differ from pool.name
+  #   settings:                # any pool: field. Egress and connectors are NOT inherited
+  #     max_sandboxes: 3
+  #     users_per_sandbox: 5
+  #     egress:                # default is deny all. Allow only what a triggered run needs
+  #       mode: allowlist
+  #       allow_hosts: ["workiq.svc.cloud.microsoft"]      # + the connector gateway host, once you have tested it
+  #   # limits: {mode: cgroup, cpu: 0.5, memory: 1Gi, pids: 128}   # default: the interactive pool's limits
+  #   # connectors: {attach: [github]}                             # default: none
   # max_subscriptions_per_user: 10
   # max_runs_per_user_per_hour: 30
   # delegation:                # run AS the user while they are away (stores an encrypted refresh token). Second opt-in

@@ -47,6 +47,7 @@ def tcfg(delegation=True, triggers=None, **top) -> Config:
         "obo": {"enabled": True, "client_id": "cid", "resources": {"graph": [GRAPH]}},
         "triggers": {
             "enabled": True, "callback_principal_ids": [NS_OID], "max_attempts": 2,
+            "pool": {"settings": {"egress": {"mode": "allowlist", "allow_hosts": ["graph.microsoft.com"]}}},
             "sources": {
                 "mail": {"connector": "office365", "connection": "o365", "operation": "OnNewEmailV3",
                          "kind": "email", "parameters": {"folderPath": "Inbox"}},
@@ -529,11 +530,12 @@ async def test_a_busy_user_is_retried_then_failed(make_app, monkeypatch):
     monkeypatch.setattr(trg.asyncio, "sleep", fast)
     sub = await subscribe(client)
     await client.post("/v1/triggers/callback/mail", json=EMAIL, headers=NS)
-    lock = await app.state.ctx["store"].acquire_lock(f"lock:user:{uid_for(TENANT, 'alice')}", 60)   # a turn is running
+    tstore = app.state.ctx["trigger_store"]                                   # the triggers pool's own lock
+    lock = await tstore.acquire_lock(f"lock:user:{uid_for(TENANT, 'alice')}", 60)   # a triggered turn is running
     rid = (await svc._r.lrange(svc.k("q"), 0, -1))[0].decode()
     assert await svc.process(rid) == "queued"                                # put back
     assert await svc.process(rid) == "failed"                                # max_attempts is 2
-    await app.state.ctx["store"].release_lock(f"lock:user:{uid_for(TENANT, 'alice')}", lock)
+    await tstore.release_lock(f"lock:user:{uid_for(TENANT, 'alice')}", lock)
     run = (await client.get(f"/v1/triggers/{sub['id']}/runs", headers=U("alice"))).json()[0]
     assert run["status"] == "failed" and "busy" in run["error"]
     assert not any("exec runuser" in c for _, c in backend.execs)

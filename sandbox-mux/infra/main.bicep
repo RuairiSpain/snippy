@@ -7,7 +7,7 @@ param location string = resourceGroup().location
 @description('Sandbox group name.')
 param sandboxGroupName string = 'sandbox-mux'
 
-@description('Upper bound on sandboxes in the group. Keep it at or above pool.max_sandboxes in config.yaml.')
+@description('Upper bound on sandboxes in the group. Keep it at or above pool.max_sandboxes plus triggers.pool.settings.max_sandboxes in config.yaml.')
 param maxSandboxCount int = 10
 
 @description('Object ID of the identity the session manager runs as. It receives the data-plane role.')

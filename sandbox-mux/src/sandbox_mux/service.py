@@ -208,6 +208,7 @@ class SessionService:
         with tm.tracer.start_as_current_span("agent.turn") as span:
             span.set_attribute("enduser.id", uid)
             span.set_attribute("agent.conversation_id", conversation_id)
+            span.set_attribute("agent.pool", self.cfg.pool.name)
             try:
                 for attempt in (1, 2):
                     try:
