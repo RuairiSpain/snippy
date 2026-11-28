@@ -18,6 +18,57 @@ class AzureConfig(BaseModel):
     endpoint: str | None = None
 
 
+class EgressConfig(BaseModel):
+    """Outbound network policy applied to every sandbox in the pool.
+
+    disabled          deny all outbound HTTP/HTTPS (default, safest)
+    allowlist         deny everything except the hosts in `allow_hosts`
+    enabled           allow all outbound HTTP/HTTPS
+    platform_default  send no policy and take whatever the service defaults to. Docs
+                      disagree on that default, so prefer an explicit mode.
+    """
+
+    mode: Literal["disabled", "allowlist", "enabled", "platform_default"] = "disabled"
+    allow_hosts: list[str] = []
+    # Log what the policy would do without blocking. Useful when first writing an allowlist.
+    audit_only: bool = False
+    traffic_inspection: Literal["Legacy", "Partial", "Full", "None"] | None = None
+    # Also deny raw TCP/UDP (non-HTTP). Off by default: not verified that HTTPS through the
+    # egress proxy keeps working with it on. Test in your region before enabling.
+    block_non_http: bool = False
+
+    @field_validator("allow_hosts", mode="before")
+    @classmethod
+    def _split(cls, v: object) -> object:
+        if isinstance(v, str):
+            return [h.strip() for h in v.split(",") if h.strip()]
+        return v
+
+    @field_validator("allow_hosts")
+    @classmethod
+    def _hosts(cls, v: list[str]) -> list[str]:
+        import re
+        for h in v:
+            if not re.fullmatch(r"(\*\.)?[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?", h):
+                raise ValueError(f"invalid host pattern {h!r} (use example.com or *.example.com)")
+        return v
+
+    @model_validator(mode="after")
+    def _check(self) -> "EgressConfig":
+        if self.mode == "allowlist" and not self.allow_hosts:
+            raise ValueError("egress.mode allowlist needs allow_hosts; use mode disabled to block all")
+        if self.mode != "allowlist" and self.allow_hosts:
+            raise ValueError("egress.allow_hosts is only used with egress.mode: allowlist")
+        return self
+
+    def fingerprint(self) -> str:
+        """Short stable hash of the effective policy, used to detect drift on live sandboxes."""
+        import hashlib
+        import json
+        body = json.dumps(self.model_dump(), sort_keys=True)
+        return hashlib.sha256(body.encode()).hexdigest()[:12]
+
+
 class PoolConfig(BaseModel):
     name: str = Field("agents", pattern=r"^[a-z0-9][a-z0-9-]{0,40}$")
     min_sandboxes: int = Field(0, ge=0)
@@ -35,6 +86,7 @@ class PoolConfig(BaseModel):
     auto_suspend_mode: Literal["Memory", "Disk"] = "Memory"
     create_timeout_seconds: int = Field(300, ge=10)
     empty_ttl_seconds: int = Field(600, ge=0)
+    egress: EgressConfig = EgressConfig()
 
     @field_validator("cpu", "memory", "disk_size", mode="before")
     @classmethod
@@ -146,6 +198,10 @@ class Config(BaseModel):
                 raise ValueError(
                     "obo.enabled requires isolation.mode: unix_user. With home_only every user "
                     "shares one UID and could read other users' delegated tokens.")
+            if self.pool.egress.mode == "disabled":
+                raise ValueError("obo.enabled is pointless with pool.egress.mode: disabled, the "
+                                 "agent could not reach the downstream APIs. Use allowlist and "
+                                 "list their hosts.")
         return self
 
     @classmethod
@@ -174,6 +230,8 @@ ENV_ALIASES: dict[str, str] = {
     "CPU": "pool.cpu",
     "MEMORY": "pool.memory",
     "DISK_SIZE": "pool.disk_size",
+    "EGRESS_MODE": "pool.egress.mode",
+    "EGRESS_ALLOW_HOSTS": "pool.egress.allow_hosts",
 }
 
 

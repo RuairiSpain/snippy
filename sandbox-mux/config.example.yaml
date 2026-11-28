@@ -7,6 +7,7 @@
 #   SANDBOX_MUX_HISTORY_TTL_SECONDS, _TURN_TIMEOUT_SECONDS, _QUEUE_TIMEOUT_SECONDS,
 #   SANDBOX_MUX_MIN_SANDBOXES, _MAX_SANDBOXES, _USERS_PER_SANDBOX
 #   SANDBOX_MUX_CPU, _MEMORY, _DISK_SIZE   size of each sandbox
+#   SANDBOX_MUX_EGRESS_MODE, _EGRESS_ALLOW_HOSTS (comma separated)   outbound network policy
 #   SANDBOX_MUX__<SECTION>__<KEY>       anything else, e.g. SANDBOX_MUX__POOL__STRATEGY=spread
 #
 # Secrets do not belong here. Redis credentials come from the REDIS_URL
@@ -37,6 +38,12 @@ pool:
   auto_suspend_mode: Memory    # Memory | Disk
   create_timeout_seconds: 300
   empty_ttl_seconds: 600       # delete a sandbox with no users after this long (above min)
+  egress:                      # outbound network policy for every sandbox in this pool
+    mode: disabled             # disabled (deny all) | allowlist | enabled (allow all) | platform_default
+    # allow_hosts: ["api.openai.azure.com", "*.graph.microsoft.com"]   # allowlist mode only
+    # audit_only: false        # log decisions without blocking (to build an allowlist)
+    # traffic_inspection: Full # Legacy | Partial | Full | None (service default when unset)
+    # block_non_http: false    # also deny raw TCP/UDP. Verify HTTPS still works before enabling
 
 session:
   turn_timeout_seconds: 120

@@ -85,7 +85,7 @@ class PoolManager:
                     sid, BOOTSTRAP.replace("{home_root}", shlex.quote(self.cfg.isolation.home_root)))
                 if out.exit_code != 0:
                     raise RuntimeError(f"sandbox bootstrap failed: {out.stderr.strip()[:300]}")
-                await self.store.register_sandbox(sid, token)
+                await self.store.register_sandbox(sid, token, self.cfg.pool.egress.fingerprint())
                 log.info("sandbox %s registered", sid)
             except BaseException:
                 await self.store.abort_creation(token)

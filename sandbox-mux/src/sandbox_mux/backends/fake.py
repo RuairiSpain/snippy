@@ -27,6 +27,8 @@ class FakeSandboxBackend:
         self.modes: dict[tuple[str, str], str | None] = {}
         self.create_delay = create_delay
         self.fail_next_create = False
+        self.egress_applied: list[str] = []
+        self.fail_set_egress = False
         self.handler = handler
         self._ids = itertools.count(1)
         self.max_created = 0
@@ -74,6 +76,12 @@ class FakeSandboxBackend:
         self._need(sandbox_id)
         self.files[(sandbox_id, path)] = data
         self.modes[(sandbox_id, path)] = mode
+
+    async def set_egress(self, sandbox_id: str) -> None:
+        self._need(sandbox_id)
+        if self.fail_set_egress:
+            raise RuntimeError("simulated egress failure")
+        self.egress_applied.append(sandbox_id)
 
     async def delete(self, sandbox_id: str) -> None:
         self.sandboxes.pop(sandbox_id, None)

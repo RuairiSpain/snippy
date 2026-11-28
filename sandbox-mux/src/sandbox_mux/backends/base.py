@@ -40,6 +40,9 @@ class SandboxBackend(Protocol):
     async def write_file(self, sandbox_id: str, path: str, data: bytes,
                          mode: str | None = None) -> None: ...
 
+    async def set_egress(self, sandbox_id: str) -> None:
+        """Apply the currently configured egress policy to an existing sandbox."""
+
     async def delete(self, sandbox_id: str) -> None: ...
 
     async def list(self, labels: dict[str, str]) -> list[SandboxInfo]: ...

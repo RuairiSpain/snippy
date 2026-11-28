@@ -27,7 +27,8 @@ def obo_cfg(**over) -> Config:
         "obo": {"enabled": True, "client_id": "cid",
                 "resources": {"graph": ["https://graph.microsoft.com/.default"],
                               "storage": ["https://storage.azure.com/user_impersonation"]}},
-        "pool": {"max_sandboxes": 2, "users_per_sandbox": 2},
+        "pool": {"max_sandboxes": 2, "users_per_sandbox": 2,
+                 "egress": {"mode": "allowlist", "allow_hosts": ["graph.microsoft.com"]}},
         **over,
     }
     return Config.model_validate(data)

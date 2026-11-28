@@ -8,7 +8,7 @@ import asyncio
 import logging
 import time
 
-from .backends import SandboxBackend
+from .backends import SandboxBackend, SandboxGone
 from .config import Config
 from .pool import PoolManager
 from .service import SessionService, TurnInProgress
@@ -53,6 +53,7 @@ class Reaper:
         await self.evict_idle_users()
         await self.drain_empty_sandboxes()
         await self.reconcile()
+        await self.reconcile_egress()
         await self.pool.warm()
 
     async def evict_idle_users(self) -> None:
@@ -101,6 +102,28 @@ class Reaper:
                     await self.store.forget_sandbox(sid)
                 except Exception:
                     log.exception("retry delete of %s failed", sid)
+
+    async def reconcile_egress(self) -> None:
+        """Apply the configured egress policy to sandboxes created under a different one.
+
+        Without this, switching egress from enabled to disabled would leave every existing
+        sandbox open until it was replaced. A failure is retried on the next sweep."""
+        want = self.cfg.pool.egress.fingerprint()
+        for sid, st in (await self.store.states()).items():
+            if st != "ready":
+                continue
+            meta = await self.store.sandbox_meta(sid)
+            if meta.get("egress") == want:
+                continue
+            try:
+                await self.backend.set_egress(sid)
+            except SandboxGone:
+                continue  # reconcile() forgets it
+            except Exception:
+                log.exception("could not apply egress policy to %s; will retry", sid)
+                continue
+            await self.store.set_sandbox_meta(sid, {**meta, "egress": want})
+            log.info("egress policy %s applied to %s", want, sid)
 
     async def reconcile(self) -> None:
         """Compare Redis with what actually exists in the sandbox group."""

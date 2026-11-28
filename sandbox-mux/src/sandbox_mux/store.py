@@ -203,12 +203,22 @@ class Store:
     async def abort_creation(self, token: str) -> None:
         await self.r.zrem(self.k("creating"), token)
 
-    async def register_sandbox(self, sandbox_id: str, token: str) -> None:
+    async def register_sandbox(self, sandbox_id: str, token: str, egress: str = "") -> None:
         await self._register(
             keys=[self.k("load"), self.k("state"), self.k("creating"), self.k("meta"),
                   self.k("sbxactive")],
-            args=[sandbox_id, token, json.dumps({"created_ms": now_ms()}), now_ms()],
+            args=[sandbox_id, token, json.dumps({"created_ms": now_ms(), "egress": egress}),
+                  now_ms()],
         )
+
+    async def sandbox_meta(self, sandbox_id: str) -> dict:
+        raw = await self.r.hget(self.k("meta"), sandbox_id)
+        return json.loads(_s(raw)) if raw else {}
+
+    async def set_sandbox_meta(self, sandbox_id: str, meta: dict) -> None:
+        # Only while the sandbox is still registered, so a concurrent forget is not undone.
+        if await self.r.hexists(self.k("state"), sandbox_id):
+            await self.r.hset(self.k("meta"), sandbox_id, json.dumps(meta))
 
     async def try_drain(self, sandbox_id: str) -> bool:
         return int(await self._drain(keys=[self.k("load"), self.k("state")],

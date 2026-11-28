@@ -10,11 +10,19 @@ import datetime as dt
 import logging
 
 from azure.core.exceptions import HttpResponseError, ResourceNotFoundError
-from azure.containerapps.sandbox import endpoint_for_region
+from azure.containerapps.sandbox import endpoint_for_region, validate_egress_policy
+from azure.containerapps.sandbox.models import (
+    EgressHttpPolicy,
+    EgressPolicy,
+    EgressRule,
+    EgressRuleAction,
+    EgressRuleMatch,
+    EgressTransportPolicy,
+)
 from azure.containerapps.sandbox.aio import SandboxGroupClient
 from azure.identity.aio import DefaultAzureCredential
 
-from ..config import Config
+from ..config import Config, EgressConfig
 from .base import ExecOutcome, SandboxGone, SandboxInfo
 
 log = logging.getLogger(__name__)
@@ -26,6 +34,29 @@ def _to_epoch(value: object) -> float | None:
             value = value.replace(tzinfo=dt.timezone.utc)
         return value.timestamp()
     return None
+
+
+def build_egress_policy(e: EgressConfig) -> EgressPolicy | None:
+    """Translate the config into an SDK policy. None means: send no policy."""
+    if e.mode == "platform_default":
+        return None
+    allow = e.mode == "enabled"
+    rules = [
+        EgressRule(name=f"allow-{i}", match=EgressRuleMatch(host=h),
+                   action=EgressRuleAction(type="Allow"))
+        for i, h in enumerate(e.allow_hosts, start=1)
+    ]
+    http = EgressHttpPolicy(
+        default_action="Allow" if allow else "Deny",
+        rules=rules,
+        enforcement_mode="Audit" if e.audit_only else "Enforced",
+        traffic_inspection=e.traffic_inspection,
+    )
+    policy = EgressPolicy(http=http)
+    if e.block_non_http:
+        policy.transport_rules = EgressTransportPolicy(default_action="Deny", rules=[])
+    validate_egress_policy(policy)
+    return policy
 
 
 class AzureSandboxBackend:
@@ -68,6 +99,7 @@ class AzureSandboxBackend:
             auto_suspend_seconds=p.auto_suspend_seconds,
             auto_suspend_mode=p.auto_suspend_mode,
             labels=labels,
+            egress_policy=build_egress_policy(p.egress),
             polling_timeout=p.create_timeout_seconds,
         )
         sandbox = await poller.result()
@@ -93,6 +125,15 @@ class AzureSandboxBackend:
                          mode: str | None = None) -> None:
         try:
             await self._c.get_sandbox_client(sandbox_id).write_file(path, data, mode=mode)
+        except ResourceNotFoundError as e:
+            raise SandboxGone(sandbox_id) from e
+
+    async def set_egress(self, sandbox_id: str) -> None:
+        policy = build_egress_policy(self._cfg.pool.egress)
+        if policy is None:
+            return  # platform_default: there is no way to remove a policy, so leave it
+        try:
+            await self._c.get_sandbox_client(sandbox_id).set_egress_policy(policy)
         except ResourceNotFoundError as e:
             raise SandboxGone(sandbox_id) from e
 

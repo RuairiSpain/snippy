@@ -74,6 +74,53 @@ Idle compute cost is handled by the platform: each sandbox is created with
 `auto_suspend_seconds` and `auto_suspend_mode`, and `ensure_running` resumes it on demand.
 A shared sandbox only suspends when none of its users is active.
 
+## Network isolation and egress
+
+Outbound access is set per pool with `pool.egress` and applied to each sandbox when it is
+created (`egress_policy` on sandbox creation):
+
+| `egress.mode` | Outbound HTTP/HTTPS |
+|---|---|
+| `disabled` (default) | Denied. The agent has no internet |
+| `allowlist` | Denied except hosts in `allow_hosts` (`example.com`, `*.example.com`) |
+| `enabled` | Allowed |
+| `platform_default` | No policy sent: you get whatever the service defaults to |
+
+I use explicit modes because the sources disagree on the service default (Microsoft's overview
+says unrestricted without a policy, one news article says deny). Do not rely on it.
+`SANDBOX_MUX_EGRESS_MODE` and `SANDBOX_MUX_EGRESS_ALLOW_HOSTS` set these from the environment.
+`audit_only` logs what a policy would block without blocking, which helps when building an
+allowlist.
+
+**Changing the setting takes effect on running sandboxes.** Each sandbox is registered with the
+fingerprint of the policy it was created under. The reaper leader applies the current policy
+to any sandbox whose fingerprint differs (`set_egress_policy`) and retries on failure. So
+switching `enabled` to `disabled` closes existing sandboxes within one sweep (30 seconds by
+default), not only new ones. `platform_default` cannot undo an earlier policy.
+
+If `obo.enabled`, egress `disabled` is rejected at startup, because the agent could not reach
+the downstream APIs. Use `allowlist` with their hosts (for example `graph.microsoft.com`).
+
+What this does not give you, and what I could not verify:
+
+* **Egress policy is per sandbox, not per user.** All users on a sandbox share it. Different
+  network permissions per user need different pools, which means separate service instances
+  with different `pool.name` and egress settings.
+* **Sandbox-to-sandbox traffic.** I found nothing in the public docs saying whether two
+  sandboxes in one group can reach each other over the network. Test it: from one sandbox,
+  try to connect to another's address. Denying egress is the control this project uses, but I
+  have not confirmed that it covers east-west traffic. For hard separation use a separate
+  sandbox group (and VNet, one subnet per group) for each trust boundary.
+* **No inbound by design.** The manager never adds sandbox ports; all access is exec and file
+  calls through the data plane.
+* **Raw TCP/UDP.** `block_non_http` sets the transport default to deny. It is off by default
+  because I could not confirm that HTTPS through the egress proxy still works with it on. The
+  SDK's transport rules need a single destination port per rule, so "block this CIDR on all
+  ports" cannot be expressed; private ranges are not blocked individually.
+* **Not run against the service.** The policy objects are built with the real SDK models and
+  pass its validator, and the wiring is tested with stubs. No sandbox has been created with
+  these policies.
+
 ## On-Behalf-Of: acting as the signed-in user
 
 With `obo.enabled`, a request can ask for delegated tokens, and the agent process (which
@@ -136,6 +183,7 @@ from the environment (the environment wins). Values are validated at startup.
 | `SANDBOX_MUX_QUEUE_TIMEOUT_SECONDS` | `session.queue_timeout_seconds` | Wait for capacity before HTTP 429 |
 | `SANDBOX_MUX_MIN_SANDBOXES`, `_MAX_SANDBOXES`, `_USERS_PER_SANDBOX` | `pool.*` | Pool shape |
 | `SANDBOX_MUX_CPU`, `_MEMORY`, `_DISK_SIZE` | `pool.cpu`, `pool.memory`, `pool.disk_size` | Size of each sandbox, e.g. `2` or `2000m`, `4Gi`, `20Gi`. Shared by all users on it, so size for `users_per_sandbox`. Applied at creation |
+| `SANDBOX_MUX_EGRESS_MODE`, `_EGRESS_ALLOW_HOSTS` | `pool.egress.*` | Outbound network policy (see Network isolation) |
 | `SANDBOX_MUX__<SECTION>__<KEY>` | any setting | e.g. `SANDBOX_MUX__POOL__STRATEGY=spread` |
 
 These variables can also be put in a `.env` file in the working directory (or the path in
@@ -204,9 +252,10 @@ Prerequisites in Azure:
 * **Not tested against real Azure.** The test suite uses the in-memory backend and
   fakeredis. The in-sandbox commands (`useradd`, `runuser`, `hidepid`) are built and
   checked for shape, not executed.
-* **Egress and secrets.** Egress policy is per sandbox. Do not put model keys in the image
-  or agent environment; use the group's egress credential injection or a gateway. This
-  project does not configure egress policies.
+* **Egress and secrets.** Egress policy is per sandbox and shared by its users. Do not put
+  model keys in the image or agent environment; use the group's egress credential injection
+  or a gateway. This project sets allow/deny egress policies but does not configure
+  credential injection.
 * **Waiting uses polling** with jittered backoff, not Redis pub/sub.
 * **Redis Cluster** is not supported: the Lua scripts touch keys that do not share a hash
   slot. Use a single primary (Azure Cache for Redis Standard/Premium, non-clustered).
