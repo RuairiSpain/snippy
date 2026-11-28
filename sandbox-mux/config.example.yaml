@@ -101,6 +101,12 @@ triggers:                      # run agents when connector events arrive. OFF: a
   #       allow_hosts: ["workiq.svc.cloud.microsoft"]      # + the connector gateway host, once you have tested it
   #   # limits: {mode: cgroup, cpu: 0.5, memory: 1Gi, pids: 128}   # default: the interactive pool's limits
   #   # connectors: {attach: [github]}                             # default: none
+  # require_source_secret: true   # each source's callback URL carries a secret derived from TRIGGER_CALLBACK_KEY
+  # delegated_aliases: [graph-read]   # the ONLY obo.resources an unattended run may use as the user. Read-only scopes
+  # approvals: {enabled: true, ttl_days: 7, max_pending_per_user: 50}   # runs propose; a person approves
+  # max_queued_per_user: 20        # fair queue: users are served in rotation; these bound what a flood can queue
+  # max_queue_depth: 1000
+  # max_concurrent_runs: 0         # 0 = limited only by workers; set to cap triggered runs across all replicas
   # max_subscriptions_per_user: 10
   # max_runs_per_user_per_hour: 30
   # delegation:                # run AS the user while they are away (stores an encrypted refresh token). Second opt-in

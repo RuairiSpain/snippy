@@ -158,6 +158,9 @@ class DelegationService:
 
     async def tokens_for(self, uid: str, tenant_id: str, oid: str, aliases: list[str]) -> dict:
         """Access tokens for `aliases`, as the user, without the user present."""
+        barred = [a for a in aliases if a not in self.cfg.triggers.delegated_aliases]
+        if barred:
+            raise DelegationError(403, f"Not allowed for unattended runs: {', '.join(barred)}")
         lock = f"lock:deleg:{uid}"
         deadline = time.monotonic() + 15
         while not (token := await self.store.acquire_lock(lock, 30)):

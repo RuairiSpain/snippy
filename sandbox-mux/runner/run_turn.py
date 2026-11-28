@@ -44,6 +44,17 @@ def mcp_config() -> dict | None:
         return json.load(f)
 
 
+def propose(kind: str, summary: str, payload: dict) -> dict:
+    """An action you want a person to approve, instead of doing it yourself.
+
+    A triggered run has read access only. To send, post, edit or delete, return proposals in your
+    output: `{"reply": ..., "proposed_actions": [propose("send_email", "Reply to Bob", {...})]}`.
+    The owner reviews each one; if approved it runs in their interactive session with their own
+    sign-in, and the executing agent receives it as `event["approved_action"]`. `kind` is a short
+    lowercase name; keep `summary` readable, because it is what the person decides on."""
+    return {"kind": kind, "summary": summary, "payload": payload}
+
+
 def event(request: dict) -> dict | None:
     """The connector event that started this run (an email, a chat message), if any.
 

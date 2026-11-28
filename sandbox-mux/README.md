@@ -102,7 +102,7 @@ curl -X POST $HOST/v1/triggers -H "Authorization: Bearer $T" -H "Content-Type: a
   "filters": {"from": ["@partner.com"], "subject_contains": ["invoice", "overdue"], "importance": ["high"]},
   "instruction": "Summarise the email and list the amounts due.",
   "delegated_resources": []}'
-# also: GET /v1/triggers/sources, GET /v1/triggers, GET /v1/triggers/{id}, POST /v1/triggers/{id}/enable|disable,
+# also: GET /v1/approvals, POST /v1/approvals/{id}/approve|reject, GET /v1/triggers/sources, GET /v1/triggers, GET /v1/triggers/{id}, POST /v1/triggers/{id}/enable|disable,
 #       DELETE /v1/triggers/{id}, GET /v1/triggers/{id}/runs
 ```
 
@@ -117,11 +117,43 @@ write a pattern that stalls the callback. The owner's own messages never trigger
 
 **What the callback does.** It accepts only a token from the namespace's managed identity: the right tenant, an
 object ID in `callback_principal_ids`, an application token (no `scp`). A user token is refused there, and
-the namespace's token is refused as a user. It caps the body size, drops events it has already seen, caps how
-many runs one event can start, acknowledges quickly, and leaves the work to the queue. The queue lives in Redis, so
-any replica's workers can take a run, a run left by a crashed worker is retried once and then failed, and a busy
-user or pool is retried a few times. Per user there is an hourly run limit and a cap on subscriptions, and a
-subscription that fails `max_consecutive_failures` times in a row is switched off.
+the namespace's token is refused as a user. It also needs the source's own secret (next paragraph). It caps the
+body size, drops events it has already seen, caps how many runs one event can start, acknowledges quickly, and leaves
+the work to the queue. A run left by a crashed worker is retried once and then failed, and a busy user or pool is
+retried a few times. Per user there is an hourly run limit and a cap on subscriptions, and a subscription that fails
+`max_consecutive_failures` times in a row is switched off.
+
+**A secret for each source.** The namespace's identity is one identity for every trigger on it, so on its own it
+would let anyone who can create a trigger there call any source. Each source therefore also has a secret in its
+callback URL (`?k=...`), derived with HMAC from one key in `TRIGGER_CALLBACK_KEY` (nothing is stored; the key can list
+several, comma-separated, to rotate: the first signs, all verify). A secret for one source does not work for another,
+and a wrong or unknown source gets the same 403, so callers learn nothing about which sources exist. `triggers_cli arm`
+puts the right secret in the URL it prints; treat that output as a credential. The URL is readable by whoever can read
+the trigger on the namespace, so this narrows who can inject events to those people, it does not make the namespace's
+readers untrusted. The service will not start without the key unless `require_source_secret: false`.
+
+**A fair queue.** Waiting runs are kept per user, and workers take them in rotation, so a user whose source is
+flooded gets one run per turn like everyone else instead of everyone waiting behind them. At most one run per user is
+in flight. Caps bound what a flood can queue: `max_queued_per_user` (20), `max_queue_depth` (1000) and, optionally,
+`max_concurrent_runs` across all replicas. A dropped run is recorded as skipped with the reason. In-flight work has a
+lease, so a worker that dies cannot hold a slot. `GET /v1/pool/status` shows the waiting and running counts.
+
+**Unattended runs are read-only; a person approves anything that sends or changes something.**
+* `triggers.delegated_aliases` is the only list of `obo.resources` aliases an unattended run may use as the user, and
+  it is required when delegation is on. Put read-only scopes there (for example Mail.Read, not Mail.Send). A run that
+  cannot obtain a write scope cannot send or change anything, whatever an email tells it. Consent, subscriptions and
+  token fetches are all refused for any other alias.
+* When the agent wants to act it returns `proposed_actions` instead (`propose()` in `runner/run_turn.py`): a short
+  `kind`, a readable `summary` and a `payload`. The service cleans them (hidden characters removed, sizes and counts
+  capped) and stores them for the subscription's owner: `GET /v1/approvals`, `GET /v1/approvals/{id}`.
+* `POST /v1/approvals/{id}/approve` with `{"obo_resources": ["graph-write"]}` runs the action **now, in the owner's
+  interactive session, with their live token**, so the person is present and no stored credential is used.
+  The executing agent gets it as `event["approved_action"]`, marked as coming from an automated run that read untrusted
+  content. `POST /v1/approvals/{id}/reject` runs nothing. An approval runs at most once, only its owner can decide,
+  it expires after `ttl_days`, and a failed action is recorded and not retried. Only triggered runs create proposals.
+
+A reviewer is still deciding on text an attacker may have shaped through the agent. Make summaries show the
+concrete effect (who gets what), and keep the payload small enough to read.
 
 **The event is untrusted text, and an agent that reads someone else's email is a prompt-injection target.**
 The event reaches the agent in its own `event` field, never inside the instruction, with a note saying it is
@@ -153,7 +185,7 @@ triggers:
   delegated run must be able to reach the API: allow that one host.
 * **Separate capacity.** A flood of events cannot take interactive slots, and a full interactive pool does not stop
   triggered runs. Each pool has its own per-user lock, so a running interactive turn does not block a triggered one.
-  The queue itself is still shared by all triggered runs.
+  The queue is fair (below).
 * **One deployment.** Both pools run in the same service with their own maintenance loop, idle eviction, egress and
   connector reconciliation, warm pool and retirement. `DELETE /v1/me/session` removes the user from both pools.
   `GET /v1/pool/status` (admins) shows both. `triggers.pool.separate: false` shares the interactive pool instead.
@@ -171,8 +203,8 @@ covered by a deny policy unless you set `egress.block_non_http`; test that befor
 **Running as the user while they are away (option C).** A trigger fires with no signed-in user, so there is no token
 to exchange. With `triggers.delegation.enabled`, a user consents once and the service keeps an encrypted refresh token:
 
-1. `POST /v1/triggers/consent/start {"resource": "graph"}` returns a Microsoft sign-in URL for one resource alias
-   from `obo.resources`. After the user signs in and consents, Microsoft redirects the browser to
+1. `POST /v1/triggers/consent/start {"resource": "graph-read"}` returns a Microsoft sign-in URL for one resource alias
+   from `triggers.delegated_aliases`. After the user signs in and consents, Microsoft redirects the browser to
    `/v1/triggers/consent/callback`; the one-time `state` ties that to the user who started it, and the account that
    signs in must be that same user or nothing is stored.
 2. A subscription with `"delegated_resources": ["graph"]` is accepted only for resources the user consented to.

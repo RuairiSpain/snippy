@@ -10,6 +10,7 @@ import time
 from dataclasses import dataclass, field
 
 from .backends import SandboxBackend, SandboxGone
+from .approvals import clean_proposals
 from .config import Config
 from .files import FileError, FileRecord, FileService, unique_names
 from .limits import snippet as limits_snippet
@@ -38,6 +39,7 @@ class TurnResult:
     output_tokens: int
     outputs: list[FileRecord] = field(default_factory=list)
     skipped_outputs: list[dict] = field(default_factory=list)
+    proposed_actions: list[dict] = field(default_factory=list)   # the agent's requests for approval
 
 
 def username(uid: str) -> str:
@@ -310,7 +312,8 @@ class SessionService:
         span.set_attribute("gen_ai.usage.output_tokens", o)
         tm.input_tokens.add(i)
         tm.output_tokens.add(o)
-        return TurnResult(result["reply"], sid, i, o, outputs, skipped)
+        proposals = clean_proposals(result.get("proposed_actions"), self.cfg.triggers.approvals)
+        return TurnResult(result["reply"], sid, i, o, outputs, skipped, proposals)
 
     async def _stage_inputs(self, sid: str, env: UserEnv, inputs: list[FileRecord]) -> list[dict]:
         """Copy the user's uploaded files into the root-owned input directory."""

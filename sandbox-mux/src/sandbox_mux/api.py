@@ -22,11 +22,12 @@ from .delegation import DelegationError, DelegationService, TokenVault
 from .files import FILE_ID, FileError, FileService
 from .config import Config
 from .pool import PoolBusy, PoolManager
+from .approvals import APPROVAL_ID, ApprovalError, ApprovalService
 from .obo import OboBroker, OboError
 from .reaper import Reaper
 from .service import AgentError, SessionService, TurnInProgress
 from .store import Store
-from .triggers import SUB_ID, TriggerError, TriggerService
+from .triggers import SUB_ID, CallbackSecrets, TriggerError, TriggerService
 
 log = logging.getLogger(__name__)
 CONV_ID = r"^[A-Za-z0-9_-]{1,64}$"
@@ -53,6 +54,12 @@ class TriggerCreate(BaseModel):
     include_own_messages: bool = False
 
 
+class ApprovalDecision(BaseModel):
+    # Resource aliases (obo.resources) the approved action may use, as you, right now. None means
+    # it runs with no delegated access.
+    obo_resources: list[str] = Field(default_factory=list, max_length=5)
+
+
 class ConsentStart(BaseModel):
     resource: str = Field(..., pattern=r"^[A-Za-z0-9_-]{1,40}$")
 
@@ -67,7 +74,8 @@ class InvokeResponse(BaseModel):
 
 def create_app(cfg: Config | None = None, *, backend=None, redis_client=None,
                run_reaper: bool = True, obo_broker: OboBroker | None = None,
-               blob_store=None, msal_factory=None, vault: TokenVault | None = None) -> FastAPI:
+               blob_store=None, msal_factory=None, vault: TokenVault | None = None,
+               callback_secrets: CallbackSecrets | None = None) -> FastAPI:
     cfg = cfg or Config.load()
 
     @contextlib.asynccontextmanager
@@ -93,7 +101,9 @@ def create_app(cfg: Config | None = None, *, backend=None, redis_client=None,
             blobs = blob_store or make_blob_store(cfg.files)
             files = FileService(cfg, store, blobs)
         service = SessionService(cfg, store, main_b, pool, files)
-        triggers = delegation = None
+        triggers = delegation = approvals = None
+        secrets_for_callbacks = callback_secrets
+        obo_instance = obo_broker or (OboBroker(cfg) if cfg.obo.enabled else None)
         # Triggered runs get their own pool (own sandboxes, egress, connectors, limits) unless
         # triggers.pool.separate is false. Same backend connection, separate settings and state.
         trigger_service, trigger_pool, trigger_reaper, trigger_store = service, pool, None, store
@@ -112,7 +122,11 @@ def create_app(cfg: Config | None = None, *, backend=None, redis_client=None,
                 delegation = DelegationService(
                     cfg, store, vault or TokenVault.from_env(cfg.triggers.delegation.key_env),
                     msal_factory)
-            triggers = TriggerService(cfg, store, trigger_service, delegation)
+            approvals = (ApprovalService(cfg, store, service, obo_instance)
+                         if cfg.triggers.approvals.enabled else None)
+            if cfg.triggers.require_source_secret and secrets_for_callbacks is None:
+                secrets_for_callbacks = CallbackSecrets.from_env(cfg.triggers.callback_key_env)
+            triggers = TriggerService(cfg, store, trigger_service, delegation, approvals)
             if run_reaper:       # workers run wherever the maintenance loop does (production)
                 worker_tasks = [asyncio.create_task(triggers.worker_loop(stop_workers))
                                 for _ in range(cfg.triggers.workers)]
@@ -120,8 +134,8 @@ def create_app(cfg: Config | None = None, *, backend=None, redis_client=None,
         app.state.ctx = dict(cfg=cfg, store=store, pool=pool, service=service, files=files,
                              triggers=triggers, delegation=delegation, trigger_service=trigger_service,
                              trigger_pool=trigger_pool, trigger_store=trigger_store,
-                             trigger_reaper=trigger_reaper, reaper=reaper,
-                             obo=obo_broker or (OboBroker(cfg) if cfg.obo.enabled else None))
+                             trigger_reaper=trigger_reaper, reaper=reaper, approvals=approvals,
+                             callback_secrets=secrets_for_callbacks, obo=obo_instance)
         app.state.auth = Authenticator(cfg.auth)
         task = asyncio.create_task(reaper.run()) if run_reaper else None
         trigger_task = (asyncio.create_task(trigger_reaper.run())
@@ -224,6 +238,8 @@ def create_app(cfg: Config | None = None, *, backend=None, redis_client=None,
                     "max_sandboxes": c.pool.max_sandboxes, "egress": c.pool.egress.mode,
                     "connectors": len(c.connectors.ids)}
         out = await one(app.state.ctx["store"], cfg)
+        if app.state.ctx["triggers"] is not None:
+            out["trigger_queue"] = await app.state.ctx["triggers"].queue_stats()
         ts = app.state.ctx["trigger_store"]
         if ts is not app.state.ctx["store"]:
             out["triggers_pool"] = await one(ts, cfg.triggers_pool_cfg())
@@ -345,6 +361,10 @@ def _register_trigger_routes(app: FastAPI, cfg: Config) -> None:
     async def callback(source: str, request: Request, authorization: str | None = Header(None)):
         await app.state.auth.authenticate_service(
             authorization, t.callback_audience or cfg.auth.audience, t.callback_principal_ids)
+        secrets_ = app.state.ctx["callback_secrets"]
+        if secrets_ and not secrets_.verify(source, request.query_params.get("k")):
+            # Same answer as a wrong identity, so a caller learns nothing about which sources exist.
+            raise HTTPException(403, "Caller is not an allowed identity")
         payload = await _read_json_limited(request, t.max_payload_bytes)
         try:
             return {"ok": True, **await triggers().handle_callback(source, payload)}
@@ -361,6 +381,9 @@ def _register_trigger_routes(app: FastAPI, cfg: Config) -> None:
     if t.delegation.enabled:
         @app.post("/v1/triggers/consent/start")
         async def consent_start(req: ConsentStart, who: Principal = Depends(principal_dependency)):
+            if req.resource not in t.delegated_aliases:
+                raise HTTPException(422, f"'{req.resource}' is not allowed for unattended runs. Allowed: "
+                                         f"{', '.join(t.delegated_aliases)}")
             try:
                 return await delegation().start(who.uid, who.upn, req.resource)
             except DelegationError as e:
@@ -394,6 +417,41 @@ def _register_trigger_routes(app: FastAPI, cfg: Config) -> None:
         @app.api_route("/v1/triggers/consent/{rest:path}", methods=["GET", "POST", "DELETE"])
         async def consent_disabled(rest: str = ""):
             raise HTTPException(404, "Delegated triggers are not enabled")
+
+    if t.approvals.enabled:
+        def approvals() -> ApprovalService:
+            return app.state.ctx["approvals"]
+
+        @app.get("/v1/approvals")
+        async def list_approvals(status: str | None = Query(None, pattern=r"^(pending|approved|rejected|expired|failed)$"),
+                                 who: Principal = Depends(principal_dependency)):
+            return await approvals().list(who.uid, status)
+
+        @app.get("/v1/approvals/{approval_id}")
+        async def get_approval(approval_id: Annotated[str, Path(pattern=APPROVAL_ID)],
+                               who: Principal = Depends(principal_dependency)):
+            try:
+                return approvals().public(await approvals().get(who.uid, approval_id))
+            except ApprovalError as e:
+                raise HTTPException(e.status, e.detail) from e
+
+        @app.post("/v1/approvals/{approval_id}/reject")
+        async def reject_approval(approval_id: Annotated[str, Path(pattern=APPROVAL_ID)],
+                                  who: Principal = Depends(principal_dependency)):
+            try:
+                return await approvals().reject(who.uid, approval_id)
+            except ApprovalError as e:
+                raise HTTPException(e.status, e.detail) from e
+
+        @app.post("/v1/approvals/{approval_id}/approve")
+        async def approve_approval(approval_id: Annotated[str, Path(pattern=APPROVAL_ID)],
+                                   req: ApprovalDecision, who: Principal = Depends(principal_dependency)):
+            """Carry out the action now, in your own session and with your own sign-in."""
+            try:
+                return await approvals().approve(who.uid, who.tenant_id, who.oid, who.assertion,
+                                                 approval_id, req.obo_resources)
+            except ApprovalError as e:
+                raise HTTPException(e.status, e.detail) from e
 
     @app.post("/v1/triggers", status_code=201)
     async def create_trigger(req: TriggerCreate, who: Principal = Depends(principal_dependency)):

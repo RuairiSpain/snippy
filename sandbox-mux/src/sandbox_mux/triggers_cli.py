@@ -16,7 +16,7 @@ import os
 import sys
 
 from .config import Config
-from .triggers import arm_trigger_body
+from .triggers import CallbackSecrets, arm_trigger_body
 
 
 def main(argv: list[str] | None = None, out=None) -> int:
@@ -38,7 +38,18 @@ def main(argv: list[str] | None = None, out=None) -> int:
         print("error: the callback URL must be https", file=sys.stderr)
         return 2
     audience = cfg.triggers.callback_audience or cfg.auth.audience
-    print(json.dumps(arm_trigger_body(args.source, src, args.callback_base_url, audience), indent=2), file=out)
+    secret = None
+    if cfg.triggers.require_source_secret:
+        try:
+            secret = CallbackSecrets.from_env(cfg.triggers.callback_key_env).sign(args.source)
+        except ValueError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 2
+    print(json.dumps(arm_trigger_body(args.source, src, args.callback_base_url, audience, secret),
+                     indent=2), file=out)
+    if secret:
+        print("\n# The callback URL contains this source's secret. Treat the file as a credential: do not\n"
+              "# commit it or paste it into logs.", file=out)
     print("\n# Create it (also needs an access policy letting the namespace's managed identity use\n"
           f"# connection '{src.connection}', and its object ID in triggers.callback_principal_ids):\n"
           "# az rest --method PUT --url \"https://management.azure.com/subscriptions/<sub>/resourceGroups/<rg>/"

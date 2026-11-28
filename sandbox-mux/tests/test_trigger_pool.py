@@ -11,7 +11,7 @@ from sandbox_mux.backends.base import ExecOutcome
 from sandbox_mux.service import UserEnv, username
 from sandbox_mux.store import now_ms
 
-from test_triggers import (EMAIL, GRAPH, NS, TENANT, U, World, consent, make_app,  # noqa: F401
+from test_triggers import (EMAIL, GRAPH, NS, TENANT, U, World, cb, consent, make_app,  # noqa: F401
                            subscribe, tcfg)
 
 MCP = "/subscriptions/s/resourceGroups/rg/providers/Microsoft.Web/connectorGateways/ns/mcpserverconfigs/mail"
@@ -39,7 +39,7 @@ async def interactive_turn(client, user="alice", prompt="hi"):
 
 
 async def trigger_turn(client, app, user="alice", event=None):
-    await client.post("/v1/triggers/callback/mail", json=event or EMAIL, headers=NS)
+    await client.post(cb("mail"), json=event or EMAIL, headers=NS)
     await app.state.ctx["triggers"].drain_once()
 
 
@@ -155,7 +155,7 @@ async def test_the_pools_have_separate_capacity(make_app):
     assert runs[0]["status"] == "succeeded"
     # and a flood of triggered runs cannot take interactive slots
     for i in range(3):
-        await client.post("/v1/triggers/callback/mail", json={**EMAIL, "id": f"f{i}"}, headers=NS)
+        await client.post(cb("mail"), json={**EMAIL, "id": f"f{i}"}, headers=NS)
     await app.state.ctx["triggers"].drain_once()
     assert len([s for s in backend.sandboxes.values() if s["pool"] == "agents"]) == 1
     assert len([s for s in backend.sandboxes.values() if s["pool"] == "triggers"]) == 1
