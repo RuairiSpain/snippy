@@ -344,6 +344,45 @@ def test_filters(filters, fields, expected):
     assert trg.matches(filters, fields) is expected
 
 
+@pytest.mark.parametrize("sender", [
+    "bob@partner.com <attacker@evil.com>",              # the allowed address only in the display name
+    '"bob@partner.com" <attacker@evil.com>',
+    "Bob (bob@partner.com) <attacker@evil.com>",
+    "attacker@evil.com",
+])
+def test_a_display_name_cannot_impersonate_an_allowed_sender(sender):
+    assert trg.matches({"from": ["bob@partner.com"]}, {"from": sender}) is False
+    assert trg.matches({"from": ["@partner.com"]}, {"from": sender}) is False
+
+
+@pytest.mark.parametrize("sender", [
+    "bob@partner.com", "BOB@Partner.com", "Bob Smith <bob@partner.com>", '"Smith, Bob" <bob@partner.com>',
+])
+def test_the_real_address_still_matches(sender):
+    assert trg.matches({"from": ["bob@partner.com"]}, {"from": sender}) is True
+    assert trg.matches({"from": ["@partner.com"]}, {"from": sender}) is True
+
+
+def test_a_lookalike_domain_does_not_match():
+    for sender in ("x@evilpartner.com", "x@partner.com.evil.io", "x@sub.partner.com"):
+        assert trg.matches({"from": ["@partner.com"]}, {"from": sender}) is False
+
+
+def test_the_owner_cannot_be_hidden_or_framed_through_a_display_name():
+    own = "alice@contoso.com"
+    assert trg.matches({}, {"from": "alice@contoso.com <attacker@evil.com>"}, own=own) is True    # a stranger's mail is handled
+    assert trg.matches({}, {"from": "Mallory <alice@contoso.com>"}, own=own) is False             # the real owner address
+
+
+def test_chat_senders_are_matched_by_id_not_by_display_name():
+    teams = tcfg().triggers.sources["chat"]
+    ev = trg.normalize("chat", teams, {"id": "1", "from": {"user": {"id": "u-123", "displayName": "bob@partner.com"}},
+                                       "body": {"content": "hi"}}, max_chars=100, max_events=1)[0]
+    assert ev.fields["from"] == "u-123" and ev.fields["from_name"] == "bob@partner.com"
+    assert trg.matches({"from": ["bob@partner.com"]}, ev.fields) is False        # the name someone picked
+    assert trg.matches({"from": ["u-123"]}, ev.fields) is True
+
+
 def test_the_owners_own_messages_do_not_trigger_unless_asked():
     fields = {"from": "Alice <alice@contoso.com>", "subject": "x"}
     assert trg.matches({}, fields, own="alice@contoso.com") is False

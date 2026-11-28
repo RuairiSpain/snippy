@@ -46,8 +46,10 @@ KIND_FIELDS: dict[str, dict[str, str]] = {
     "email": {"id": "id", "from": "from", "subject": "subject", "body": "bodyPreview",
               "importance": "importance", "has_attachments": "hasAttachments",
               "received": "receivedDateTime"},
-    "teams_message": {"id": "id", "from": "from.user.displayName", "text": "body.content",
-                      "chat": "chatId"},
+    # `from` is the sender's id, not their display name: a display name is chosen by the sender
+    # and must never be used to decide whether to trust a message.
+    "teams_message": {"id": "id", "from": "from.user.id", "from_name": "from.user.displayName",
+                      "text": "body.content", "chat": "chatId"},
     "generic": {},
 }
 

@@ -20,6 +20,7 @@ import re
 import secrets
 import time
 import unicodedata
+from email.utils import parseaddr
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
@@ -32,7 +33,6 @@ from .store import Store, now_ms
 log = logging.getLogger(__name__)
 
 SUB_ID = r"^[0-9a-f]{16}$"
-EMAIL = re.compile(r"[\w.+'-]+@[\w.-]+")
 
 
 class TriggerError(Exception):
@@ -118,13 +118,17 @@ def normalize(name: str, src: TriggerSource, payload: Any, *, max_chars: int,
 # ---- filters ----------------------------------------------------------------------------------------
 
 def _sender_matches(pattern: str, value: str) -> bool:
-    p, v = pattern.strip().lower(), value.lower()
-    addresses = EMAIL.findall(v)
-    if not addresses:
-        return p == v.strip()
-    if p.startswith("@"):
-        return any(a.endswith(p) for a in addresses)
-    return p in addresses
+    """Match the sender's real address, never the display name.
+
+    A sender controls their display name, so `bob@partner.com <attacker@evil.com>` is the
+    address attacker@evil.com. Only the address parsed from the header counts. A value with no
+    address (a chat user id or a bare name) is compared whole."""
+    p = pattern.strip().lower()
+    _, addr = parseaddr(value)
+    if "@" in addr:
+        addr = addr.lower()
+        return addr.endswith(p) if p.startswith("@") else addr == p
+    return p == value.strip().lower()
 
 
 def matches(filters: dict[str, list[str]], fields: dict[str, str], *, own: str | None = None,

@@ -106,8 +106,11 @@ curl -X POST $HOST/v1/triggers -H "Authorization: Bearer $T" -H "Content-Type: a
 #       DELETE /v1/triggers/{id}, GET /v1/triggers/{id}/runs
 ```
 
-Filters: every key must match, and any one value of a key is enough. `from` matches an address
-(`bob@partner.com`) or a domain written with the at-sign (`@partner.com`, not a bare domain); `<field>_contains` is
+Filters: every key must match, and any one value of a key is enough. `from` matches the sender's real address
+(`bob@partner.com`) or a domain written with the at-sign (`@partner.com`, not a bare domain; subdomains do not match).
+The display name is ignored, because the sender chooses it. A `from` filter is still only as trustworthy as the
+mail system's sender check (a forged From header passes unless SPF, DKIM and DMARC reject it), so it is a relevance
+filter, not a security boundary; for Teams, `from` is the sender's id, not their name; `<field>_contains` is
 a case-insensitive substring; anything else is an exact match. There are no regular expressions, so a user cannot
 write a pattern that stalls the callback. The owner's own messages never trigger their subscriptions unless
 `include_own_messages` is set, which stops reply loops.
