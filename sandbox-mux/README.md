@@ -74,6 +74,42 @@ Idle compute cost is handled by the platform: each sandbox is created with
 `auto_suspend_seconds` and `auto_suspend_mode`, and `ensure_running` resumes it on demand.
 A shared sandbox only suspends when none of its users is active.
 
+## Per-user CPU, memory and process limits
+
+Users in one sandbox share its CPU and memory, so without limits one user can starve the
+others. `limits` caps each user's whole process tree:
+
+```yaml
+pool: {cpu: "4", memory: 8Gi, users_per_sandbox: 4}
+limits: {mode: cgroup, cpu: 1, memory: 2Gi, pids: 256}
+```
+
+* **`cgroup` (recommended).** One Linux cgroup v2 group per user: `cpu.max` (CPU is
+  throttled, not killed), `memory.max` with swap disabled (the kernel OOM-kills only that
+  user's processes), and `pids.max` (fork bombs stop at the limit). The turn script puts its
+  shell into the user's cgroup before `exec runuser`, so the agent and everything it spawns
+  inherit it.
+* **`ulimit` (fallback).** Process count per user, and an address-space cap that applies per
+  process, not in total. No CPU limit. Many runtimes (Python, Node, JVM) reserve large address
+  ranges, so `memory` can break them; prefer `cgroup`.
+* Limits are ceilings, not reservations. If `users_per_sandbox` times a limit exceeds the
+  sandbox size (for example 4 users at 4Gi in an 8Gi sandbox), the service logs a warning at
+  startup, because a full sandbox can still run out of memory. A limit larger than the whole
+  sandbox is rejected.
+* **Fails closed.** The cgroup setup runs at the start of every turn, because cgroups live in
+  memory and a disk-mode suspend and resume loses them. If it fails, the turn fails; it never
+  runs unlimited. When a sandbox is created the same requirements are checked (cgroup v2 mounted,
+  the needed controllers, a writable hierarchy), and a sandbox that cannot enforce the limits is
+  deleted and never registered. Then use `ulimit` or `none`.
+* Environment variables: `SANDBOX_MUX_LIMITS_MODE`, `SANDBOX_MUX_USER_CPU`,
+  `SANDBOX_MUX_USER_MEMORY`, `SANDBOX_MUX_USER_PIDS`.
+
+Not verified: whether the sandbox's kernel exposes a writable cgroup v2 hierarchy to the exec
+user. The generated scripts are tested against a fake cgroup directory and syntax-checked, not
+run in a real sandbox. The creation-time check exists so this fails loudly on the first sandbox.
+Not done: per-user disk quotas and I/O limits, per-user network limits, reporting each user's
+peak usage as metrics.
+
 ## Network isolation and egress
 
 Outbound access is set per pool with `pool.egress` and applied to each sandbox when it is
@@ -260,5 +296,5 @@ Prerequisites in Azure:
 * **Redis Cluster** is not supported: the Lua scripts touch keys that do not share a hash
   slot. Use a single primary (Azure Cache for Redis Standard/Premium, non-clustered).
 * **Exec output size and runaway processes** rely on `timeout` inside the sandbox and the
-  overall `turn_timeout_seconds`. There are no per-user CPU or memory limits (no cgroups or
-  ulimits yet), so one user can starve others on the same sandbox.
+  overall `turn_timeout_seconds`. Per-user CPU, memory and process limits are available
+  (`limits`) but off by default. There are no per-user disk quotas.

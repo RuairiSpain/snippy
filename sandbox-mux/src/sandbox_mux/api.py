@@ -47,6 +47,11 @@ def create_app(cfg: Config | None = None, *, backend=None, redis_client=None,
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI):
         telemetry.setup()
+        for what, ratio in cfg.overcommit().items():
+            if ratio > 1:
+                log.warning("per-user %s limits add up to %.1fx the sandbox size at %d users: a "
+                            "full sandbox can still run out. Lower limits.%s or users_per_sandbox.",
+                            what, ratio, cfg.pool.users_per_sandbox, what)
         r = redis_client or redis.from_url(cfg.redis.resolved_url())
         b = backend or make_backend(cfg)
         await b.start()

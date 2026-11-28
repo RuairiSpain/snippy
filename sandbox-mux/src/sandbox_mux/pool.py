@@ -10,6 +10,7 @@ import time
 
 from .backends import SandboxBackend
 from .config import Config
+from .limits import bootstrap_check
 from .store import Store
 from .telemetry import tracer
 
@@ -33,7 +34,7 @@ mkdir -p {home_root}
 chmod 711 {home_root}
 # Best effort: hide other users' processes from each other.
 mount -o remount,hidepid=2 /proc 2>/dev/null || true
-"""
+{limits_check}"""
 
 
 class PoolManager:
@@ -82,7 +83,8 @@ class PoolManager:
                 sid = await asyncio.wait_for(self.backend.create(self.labels),
                                              self.cfg.pool.create_timeout_seconds + 30)
                 out = await self.backend.exec(
-                    sid, BOOTSTRAP.replace("{home_root}", shlex.quote(self.cfg.isolation.home_root)))
+                    sid, BOOTSTRAP.replace("{home_root}", shlex.quote(self.cfg.isolation.home_root))
+                    .replace("{limits_check}", bootstrap_check(self.cfg)))
                 if out.exit_code != 0:
                     raise RuntimeError(f"sandbox bootstrap failed: {out.stderr.strip()[:300]}")
                 await self.store.register_sandbox(sid, token, self.cfg.pool.egress.fingerprint())

@@ -11,6 +11,7 @@ from dataclasses import dataclass
 
 from .backends import SandboxBackend, SandboxGone
 from .config import Config
+from .limits import snippet as limits_snippet
 from .pool import PoolBusy, PoolManager
 from .store import Store
 from . import telemetry as tm
@@ -75,10 +76,12 @@ class UserEnv:
         req = shlex.quote(self.request_path)
         t = self.cfg.session.turn_timeout_seconds
         runner = f"timeout -k 5 {t} env -i {env_args} {argv} {req}"
+        limits = limits_snippet(self.cfg, self.user)
         if self.unix:
             own = f"{req} {shlex.quote(self.obo_path)}" if with_obo else req
-            return f"set -eu\nchown {u}:{u} {own}\ncd {h}\nexec runuser -u {u} -- {runner}\n"
-        return f"set -eu\ncd {h}\nexec {runner}\n"
+            return (f"set -eu\n{limits}chown {u}:{u} {own}\ncd {h}\n"
+                    f"exec runuser -u {u} -- {runner}\n")
+        return f"set -eu\n{limits}cd {h}\nexec {runner}\n"
 
     def drop_obo(self) -> str:
         return f"rm -f {shlex.quote(self.obo_path)}\n"

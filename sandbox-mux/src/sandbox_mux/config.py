@@ -18,6 +18,60 @@ class AzureConfig(BaseModel):
     endpoint: str | None = None
 
 
+_UNITS = {"": 1, "K": 10**3, "M": 10**6, "G": 10**9, "T": 10**12,
+          "Ki": 1024, "Mi": 1024**2, "Gi": 1024**3, "Ti": 1024**4}
+
+
+def parse_size(text: str) -> int:
+    """Bytes in a quantity like 512Mi, 4Gi, 2G or a plain number of bytes."""
+    import re
+    m = re.fullmatch(r"(\d+(?:\.\d+)?)(Ki|Mi|Gi|Ti|K|M|G|T)?", text.strip())
+    if not m:
+        raise ValueError(f"invalid size {text!r}")
+    return int(float(m.group(1)) * _UNITS[m.group(2) or ""])
+
+
+def parse_cpu(text: str) -> float:
+    """Cores in a quantity like 2, 1.5 or 2000m."""
+    t = text.strip()
+    return float(t[:-1]) / 1000 if t.endswith("m") else float(t)
+
+
+class LimitsConfig(BaseModel):
+    """Per-user ceilings inside a shared sandbox. Each is a maximum, not a reservation.
+
+    cgroup   Linux cgroup v2: cpu, memory and process count, enforced for the user's whole
+             process tree. The sandbox must expose a writable cgroup v2 hierarchy; each new
+             sandbox is checked when it is created and rejected if it does not.
+    ulimit   Weaker fallback: process count per user, and an address-space cap that applies
+             per process, not in total. No CPU limit.
+    none     No limits (default).
+    """
+
+    mode: Literal["none", "cgroup", "ulimit"] = "none"
+    cpu: float | None = Field(None, gt=0)            # cores, e.g. 0.5 or 2
+    memory: str | None = Field(None, pattern=r"^\d+(\.\d+)?(Ki|Mi|Gi|Ti|K|M|G|T)?$")
+    pids: int | None = Field(None, ge=1)             # max processes and threads
+    cgroup_root: str = Field("/sys/fs/cgroup", pattern=r"^/[A-Za-z0-9_./-]*$")
+
+    @field_validator("memory", mode="before")
+    @classmethod
+    def _numbers_as_text(cls, v: object) -> object:
+        return str(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else v
+
+    @model_validator(mode="after")
+    def _check(self) -> "LimitsConfig":
+        any_set = self.cpu is not None or self.memory is not None or self.pids is not None
+        if any_set and self.mode == "none":
+            raise ValueError("limits.cpu/memory/pids are set but limits.mode is none; "
+                             "use mode cgroup (or ulimit)")
+        if self.mode != "none" and not any_set:
+            raise ValueError(f"limits.mode {self.mode} needs at least one of cpu, memory, pids")
+        if self.mode == "ulimit" and self.cpu is not None:
+            raise ValueError("limits.cpu needs mode cgroup; ulimit cannot limit CPU")
+        return self
+
+
 class EgressConfig(BaseModel):
     """Outbound network policy applied to every sandbox in the pool.
 
@@ -179,6 +233,7 @@ class Config(BaseModel):
     pool: PoolConfig = PoolConfig()
     session: SessionConfig = SessionConfig()
     isolation: IsolationConfig = IsolationConfig()
+    limits: LimitsConfig = LimitsConfig()
     agent: AgentConfig = AgentConfig()
     auth: AuthConfig = AuthConfig(mode="dev")
     obo: OboConfig = OboConfig()
@@ -191,6 +246,13 @@ class Config(BaseModel):
                        if not getattr(self.azure, k)]
             if missing:
                 raise ValueError(f"azure.{', azure.'.join(missing)} required when backend is azure")
+        lim = self.limits
+        if lim.mode == "ulimit" and self.isolation.mode != "unix_user":
+            raise ValueError("limits.mode ulimit needs isolation.mode unix_user (limits are per UID)")
+        if lim.memory and parse_size(lim.memory) > parse_size(self.pool.memory):
+            raise ValueError("limits.memory is larger than the whole sandbox (pool.memory)")
+        if lim.cpu and lim.cpu > parse_cpu(self.pool.cpu):
+            raise ValueError("limits.cpu is larger than the whole sandbox (pool.cpu)")
         if self.obo.enabled:
             if self.auth.mode != "entra":
                 raise ValueError("obo.enabled requires auth.mode: entra")
@@ -203,6 +265,17 @@ class Config(BaseModel):
                                  "agent could not reach the downstream APIs. Use allowlist and "
                                  "list their hosts.")
         return self
+
+    def overcommit(self) -> dict[str, float]:
+        """Ratio of (per-user limit x users_per_sandbox) to the sandbox size. Above 1 the limits
+        can add up to more than the sandbox has, so a full sandbox can still run out."""
+        out: dict[str, float] = {}
+        n = self.pool.users_per_sandbox
+        if self.limits.memory:
+            out["memory"] = n * parse_size(self.limits.memory) / parse_size(self.pool.memory)
+        if self.limits.cpu:
+            out["cpu"] = n * self.limits.cpu / parse_cpu(self.pool.cpu)
+        return out
 
     @classmethod
     def load(cls, path: str | os.PathLike[str] | None = None) -> "Config":
@@ -230,6 +303,10 @@ ENV_ALIASES: dict[str, str] = {
     "CPU": "pool.cpu",
     "MEMORY": "pool.memory",
     "DISK_SIZE": "pool.disk_size",
+    "LIMITS_MODE": "limits.mode",
+    "USER_CPU": "limits.cpu",
+    "USER_MEMORY": "limits.memory",
+    "USER_PIDS": "limits.pids",
     "EGRESS_MODE": "pool.egress.mode",
     "EGRESS_ALLOW_HOSTS": "pool.egress.allow_hosts",
 }
