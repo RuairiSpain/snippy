@@ -74,6 +74,64 @@ Idle compute cost is handled by the platform: each sandbox is created with
 `auto_suspend_seconds` and `auto_suspend_mode`, and `ensure_running` resumes it on demand.
 A shared sandbox only suspends when none of its users is active.
 
+## Images, the warm pool, and cold start
+
+**Is this Docker?** Partly. A sandbox boots from a *disk image*, which is its root filesystem, and
+there are three ways to get one (from the platform docs):
+
+| Source | How | Use it for |
+|---|---|---|
+| Public image | `pool.disk: python-3.12` (also `ubuntu`, `node-24`, `copilot`, `claude`, ...) | a stock runtime, maintained by Microsoft |
+| **Custom image from a container image** | build from any OCI image in Docker Hub or a registry (ACR), then `pool.disk_id` | **your agent runtime and dependencies, baked in** |
+| Committed image | `commit` a running sandbox you set up by hand | setup that is easier to do interactively |
+
+So you write a normal Dockerfile, push it to a registry, and the platform converts it to a disk image
+(private registries with a managed identity or a username and token). What runs is a microVM that
+boots that filesystem, not a Docker or Container Apps container. I have not verified how Foundry hosted
+agents build theirs, so I won't claim the two are the same.
+
+**Baking in the runtime (recommended).**
+
+```bash
+docker build -t myregistry.azurecr.io/agent:1.4 -f runner/Dockerfile runner && docker push myregistry.azurecr.io/agent:1.4
+python -m sandbox_mux.image build --image myregistry.azurecr.io/agent:1.4 --name agent-1-4 --managed-identity system
+# -> {"id": "<disk image id>", "state": "Ready", ...}
+SANDBOX_MUX_DISK_ID=<disk image id>        # set it on the service and roll it
+```
+
+`runner/Dockerfile` is a starting point (Python, your `requirements.txt`, bytecode compiled once as
+root, `/opt/agent` not writable by users). Run the build from CI on each release: it takes minutes
+(default wait 15 minutes). Other commands: `commit --sandbox-id ...`, `list`, `public`. Registry passwords
+come from an environment variable (`--registry-token-env`), never the command line. Changing
+`pool.disk_id` affects only new sandboxes; existing ones keep the old image until they are deleted
+(they are replaced as they go idle; there is no forced rollout for images, unlike connectors).
+
+**What the warm pool does.** Starting a sandbox costs a boot plus the setup script. The warm pool does
+that ahead of time so a user rarely waits:
+
+* `pool.min_sandboxes` keeps that many sandboxes created and set up even when nobody is using them.
+* `pool.min_free_slots` keeps that many *free user slots* across ready sandboxes, so a burst of new
+  users lands on an already-booted sandbox. Empty sandboxes are not deleted while they are needed for
+  this floor. It never exceeds `max_sandboxes`.
+* Idle warm sandboxes suspend after `auto_suspend_seconds` and resume on use (with
+  `auto_suspend_mode: Memory`, memory is preserved), so keeping them costs little. Resuming is
+  documented as sub-second, which I have not measured.
+* `pool.warmup_command` runs once as root in each new sandbox, after setup and before it takes users
+  (argv, not a shell string). Use it to import heavy modules, compile bytecode, or read model files:
+  the file cache and bytecode are shared by every user on the sandbox. It does not share a running
+  process between users, so it speeds cold starts, not per-user memory. A failing warm-up deletes the
+  sandbox and it is never registered.
+* Creation failures (a bad image id, a quota) stop the warm-up for that sweep and are retried at the
+  next one, instead of looping.
+
+**Not snapshots.** Creating from a snapshot cannot set labels, egress policy, connectors or ports, and
+this service needs those, so a disk image is the template to use.
+
+Not verified: that a sandbox built from your OCI image boots, keeps running, and lets the service run
+commands as root with `useradd`, `runuser` and cgroups available; the first sandbox will tell you
+(the setup script fails fast and says what is missing). Build time and image size limits, and
+registry-pull time, are not documented in what I found.
+
 ## Connectors and MCP servers
 
 Container Apps Sandboxes connectors give a sandbox access to services such as SharePoint, Office
@@ -379,6 +437,7 @@ your subscription quota still cap the total.
 | `src/sandbox_mux/files.py`, `blobs.py` | User files: quota, names, safe archive handling; Azure Blob and local stores |
 | `src/sandbox_mux/obo.py` | Entra On-Behalf-Of exchange |
 | `src/sandbox_mux/api.py` | FastAPI app: invoke, history, end session, pool status |
+| `src/sandbox_mux/image.py`, `runner/Dockerfile` | Build the sandbox disk image from a container image, from CI |
 | `runner/run_turn.py` | Example in-sandbox agent runner and its contract |
 | `infra/main.bicep` | Sandbox group, optional VNet connection, data-plane role assignment |
 | `config.example.yaml` | All settings |

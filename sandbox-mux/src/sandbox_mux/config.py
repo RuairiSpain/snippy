@@ -273,6 +273,18 @@ class PoolConfig(BaseModel):
     create_timeout_seconds: int = Field(300, ge=10)
     empty_ttl_seconds: int = Field(600, ge=0)
     egress: EgressConfig = EgressConfig()
+    # Overrides for images built from a container image, whose own entrypoint may exit at once
+    # (a Python image's default command is `python3`, which ends without a terminal).
+    entrypoint: list[str] | None = None
+    cmd: list[str] | None = None
+    # Run once as root in each new sandbox, after setup and before it takes users: import
+    # heavy modules, compile bytecode, read model files. The page cache and bytecode are shared
+    # by every user on the sandbox, and survive a memory-mode suspend. argv, not a shell string.
+    warmup_command: list[str] | None = None
+    warmup_timeout_seconds: int = Field(120, ge=1)
+    # Keep at least this many free user slots across ready sandboxes, so a burst of new users
+    # finds a booted sandbox instead of waiting for one. Capped by max_sandboxes.
+    min_free_slots: int = Field(0, ge=0)
 
     @field_validator("cpu", "memory", "disk_size", mode="before")
     @classmethod
@@ -284,6 +296,8 @@ class PoolConfig(BaseModel):
     def _check(self) -> "PoolConfig":
         if self.min_sandboxes > self.max_sandboxes:
             raise ValueError("pool.min_sandboxes must not exceed pool.max_sandboxes")
+        if self.min_free_slots > self.max_sandboxes * self.users_per_sandbox:
+            raise ValueError("pool.min_free_slots is more than max_sandboxes x users_per_sandbox")
         return self
 
 
@@ -435,6 +449,9 @@ class Config(BaseModel):
 ENV_ALIASES: dict[str, str] = {
     "IDLE_TIMEOUT_SECONDS": "pool.auto_suspend_seconds",        # suspend an idle sandbox
     "SESSION_TTL_SECONDS": "session.user_idle_ttl_seconds",     # remove an idle user's session
+    "DISK_ID": "pool.disk_id",                                   # private disk image (custom or committed)
+    "DISK": "pool.disk",                                         # public image name, e.g. python-3.12
+    "MIN_FREE_SLOTS": "pool.min_free_slots",
     "EMPTY_SANDBOX_TTL_SECONDS": "pool.empty_ttl_seconds",      # delete an empty sandbox
     "HISTORY_TTL_SECONDS": "session.history_ttl_seconds",       # expire stored conversations
     "TURN_TIMEOUT_SECONDS": "session.turn_timeout_seconds",

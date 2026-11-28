@@ -87,12 +87,16 @@ class Reaper:
         if spare <= 0:
             return
         cutoff = now_ms() - p.empty_ttl_seconds * 1000
+        _, free = await self.pool.free_slots()
         for sid in sorted(ready, key=lambda s: loads.get(s, 0)):
             if spare <= 0:
                 break
             if loads.get(sid, 0) != 0 or await self.store.sandbox_last_active_ms(sid) > cutoff:
                 continue
+            if free - p.users_per_sandbox < p.min_free_slots:
+                break                       # deleting it would drop below the free-slot floor
             if await self.store.try_drain(sid):
+                free -= p.users_per_sandbox
                 try:
                     await self.backend.delete(sid)
                 except Exception:

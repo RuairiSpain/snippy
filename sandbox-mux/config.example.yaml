@@ -32,8 +32,13 @@ pool:
   users_per_sandbox: 10        # hard cap on users bound to one sandbox
   strategy: pack               # pack = fill fullest sandbox first (cheapest)
                                # spread = least loaded first (lowest contention)
-  disk: ubuntu                 # public image name, or set disk_id for a private image
-  # disk_id: "..."
+  disk: ubuntu                 # public image name (python-3.12, node-24, ...)   env: SANDBOX_MUX_DISK
+  # disk_id: "..."             # your own image from `python -m sandbox_mux.image build`   env: SANDBOX_MUX_DISK_ID
+  # entrypoint: ["sleep"]      # only if the image's own command exits immediately
+  # cmd: ["infinity"]
+  # warmup_command: ["python3", "-c", "import numpy, pandas"]   # run once per new sandbox, as root
+  # warmup_timeout_seconds: 120
+  # min_free_slots: 0          # keep this many free user slots booted ahead of demand   env: SANDBOX_MUX_MIN_FREE_SLOTS
   cpu: "2000m"                 # per sandbox, shared by its users (env: SANDBOX_MUX_CPU)
   memory: "4096Mi"             # per sandbox (env: SANDBOX_MUX_MEMORY)
   # disk_size: "20Gi"          # per sandbox (env: SANDBOX_MUX_DISK_SIZE)

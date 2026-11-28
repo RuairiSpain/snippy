@@ -101,6 +101,8 @@ class AzureSandboxBackend:
             labels=labels,
             egress_policy=build_egress_policy(p.egress),
             connections=self._cfg.connectors.ids or None,
+            entrypoint=p.entrypoint,
+            cmd=p.cmd,
             polling_timeout=p.create_timeout_seconds,
         )
         sandbox = await poller.result()
