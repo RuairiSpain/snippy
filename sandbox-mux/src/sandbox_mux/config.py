@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 from typing import Literal
 
@@ -125,6 +126,82 @@ class LimitsConfig(BaseModel):
         if self.mode == "ulimit" and self.cpu is not None:
             raise ValueError("limits.cpu needs mode cgroup; ulimit cannot limit CPU")
         return self
+
+
+_CONNECTOR_ID = re.compile(
+    r"^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\.Web/connectorGateways/"
+    r"[^/]+/(mcpserverconfigs|connections)/[^/]+$", re.IGNORECASE)
+MAX_CONNECTORS = 10        # the service accepts at most 10 per sandbox
+
+
+class ConnectorsConfig(BaseModel):
+    """Connectors and MCP servers every sandbox in the pool is created with.
+
+    A connector must first be attached to the sandbox group (`aca sandboxgroup connector add`).
+    Each sandbox then opts in when it is created, and the list cannot change afterwards, so
+    changing this setting replaces sandboxes instead of editing them (see retire_grace_seconds).
+
+    Connectors authorize as the sandbox group's identity, not as the calling user: everyone on
+    every sandbox in the pool gets the same access. Use them for resources the whole pool may use.
+
+    `attach` entries are full resource IDs or names from `available`:
+      /subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Web/connectorGateways/<ns>/mcpserverconfigs/<name>   (MCP)
+      /subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Web/connectorGateways/<ns>/connections/<name>        (API)
+    """
+
+    available: dict[str, str] = {}              # alias -> resource ID
+    attach: list[str] = []                      # aliases or resource IDs, up to 10
+    # Where the platform writes the MCP client config inside the sandbox (for example
+    # /root/.copilot/mcp-config.json on a Copilot disk). If set, a copy readable by the calling
+    # user is placed in their request directory and its path is passed as $MCP_CONFIG_FILE.
+    config_file: str | None = Field(None, pattern=r"^/[A-Za-z0-9_./-]*$")
+    # How long a sandbox created under an older connector list may keep serving the users
+    # already on it, once the list has changed. After this it is deleted even if in use.
+    retire_grace_seconds: int = Field(3600, ge=0)
+
+    @field_validator("attach", mode="before")
+    @classmethod
+    def _split(cls, v: object) -> object:
+        if isinstance(v, str):
+            return [p.strip() for p in v.split(",") if p.strip()]
+        return v
+
+    @model_validator(mode="after")
+    def _check(self) -> "ConnectorsConfig":
+        for alias, rid in self.available.items():
+            if not re.fullmatch(r"[A-Za-z0-9_-]+", alias):
+                raise ValueError(f"connectors.available: invalid alias {alias!r}")
+            if not _CONNECTOR_ID.match(rid):
+                raise ValueError(f"connectors.available[{alias}] is not a connector resource ID")
+        _ = self.ids                                    # resolves and validates attach
+        if self.config_file and not self.attach:
+            raise ValueError("connectors.config_file is set but connectors.attach is empty")
+        return self
+
+    @property
+    def ids(self) -> list[str]:
+        out: list[str] = []
+        for item in self.attach:
+            if item in self.available:
+                rid = self.available[item]
+            elif item.startswith("/"):
+                rid = item
+            else:
+                raise ValueError(f"connectors.attach: {item!r} is neither a resource ID nor a "
+                                 f"name in connectors.available")
+            if not _CONNECTOR_ID.match(rid):
+                raise ValueError(f"connectors.attach: {rid!r} is not a connector resource ID")
+            if rid.lower() not in (o.lower() for o in out):
+                out.append(rid)
+        if len(out) > MAX_CONNECTORS:
+            raise ValueError(f"at most {MAX_CONNECTORS} connectors can be attached to a sandbox")
+        return out
+
+    def fingerprint(self) -> str:
+        """Stable hash of the effective list; empty when there are none."""
+        import hashlib
+        ids = sorted(i.lower() for i in self.ids)
+        return hashlib.sha256("\n".join(ids).encode()).hexdigest()[:12] if ids else ""
 
 
 class EgressConfig(BaseModel):
@@ -292,6 +369,7 @@ class Config(BaseModel):
     session: SessionConfig = SessionConfig()
     isolation: IsolationConfig = IsolationConfig()
     limits: LimitsConfig = LimitsConfig()
+    connectors: ConnectorsConfig = ConnectorsConfig()
     files: FilesConfig = FilesConfig()
     agent: AgentConfig = AgentConfig()
     auth: AuthConfig = AuthConfig(mode="dev")
@@ -305,6 +383,8 @@ class Config(BaseModel):
                        if not getattr(self.azure, k)]
             if missing:
                 raise ValueError(f"azure.{', azure.'.join(missing)} required when backend is azure")
+        if self.connectors.config_file and self.isolation.mode != "unix_user":
+            raise ValueError("connectors.config_file requires isolation.mode: unix_user")
         if self.files.enabled and self.isolation.mode != "unix_user":
             raise ValueError("files.enabled requires isolation.mode: unix_user. Without separate "
                              "accounts the sandbox cannot keep one user's files from another.")
@@ -365,6 +445,8 @@ ENV_ALIASES: dict[str, str] = {
     "CPU": "pool.cpu",
     "MEMORY": "pool.memory",
     "DISK_SIZE": "pool.disk_size",
+    "CONNECTORS": "connectors.attach",
+    "CONNECTOR_RETIRE_GRACE_SECONDS": "connectors.retire_grace_seconds",
     "FILES_ENABLED": "files.enabled",
     "MAX_FILE_SIZE": "files.max_file_size",
     "MAX_USER_STORAGE": "files.max_user_total_size",

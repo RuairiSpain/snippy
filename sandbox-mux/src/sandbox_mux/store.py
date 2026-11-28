@@ -38,7 +38,8 @@ local wttl = tonumber(ARGV[8])
 
 local cur = redis.call('HGET', KEYS[1], 'sandbox')
 if cur then
-  if redis.call('HGET', KEYS[3], cur) == 'ready' then
+  local cst = redis.call('HGET', KEYS[3], cur)
+  if cst == 'ready' or cst == 'retiring' then
     redis.call('ZADD', KEYS[5], now, uid)
     redis.call('ZREM', KEYS[6], uid)
     return {'bound', cur, '0'}
@@ -113,22 +114,35 @@ if sc and tonumber(sc) > 0 then redis.call('ZINCRBY', KEYS[2], -1, ARGV[2]) end
 return 1
 """
 
-# KEYS: 1 load, 2 state ; ARGV: sid. Succeeds only while the sandbox has no users.
+# KEYS: 1 load, 2 state ; ARGV: sid, mode. Succeeds only while the sandbox has no users,
+# unless mode is 'force'.
 DRAIN = """
+local st = redis.call('HGET', KEYS[2], ARGV[1])
+if st ~= 'ready' and st ~= 'retiring' then return 0 end
 local sc = redis.call('ZSCORE', KEYS[1], ARGV[1])
-if sc and tonumber(sc) == 0 and redis.call('HGET', KEYS[2], ARGV[1]) == 'ready' then
+if not sc then return 0 end
+if ARGV[2] == 'force' or tonumber(sc) == 0 then
   redis.call('HSET', KEYS[2], ARGV[1], 'draining')
   return 1
 end
 return 0
 """
 
-# KEYS: 1 load, 2 state, 3 meta, 4 sbxactive ; ARGV: sid
+# KEYS: 1 state, 2 retiring ; ARGV: sid, now_ms. Stop placing new users on this sandbox.
+RETIRE = """
+if redis.call('HGET', KEYS[1], ARGV[1]) ~= 'ready' then return 0 end
+redis.call('HSET', KEYS[1], ARGV[1], 'retiring')
+redis.call('HSET', KEYS[2], ARGV[1], ARGV[2])
+return 1
+"""
+
+# KEYS: 1 load, 2 state, 3 meta, 4 sbxactive, 5 retiring ; ARGV: sid
 FORGET = """
 redis.call('ZREM', KEYS[1], ARGV[1])
 redis.call('HDEL', KEYS[2], ARGV[1])
 redis.call('HDEL', KEYS[3], ARGV[1])
 redis.call('ZREM', KEYS[4], ARGV[1])
+redis.call('HDEL', KEYS[5], ARGV[1])
 return 1
 """
 
@@ -177,6 +191,7 @@ class Store:
         self._register = client.register_script(REGISTER)
         self._unbind = client.register_script(UNBIND)
         self._drain = client.register_script(DRAIN)
+        self._retire = client.register_script(RETIRE)
         self._forget = client.register_script(FORGET)
         self._reserve_file = client.register_script(RESERVE_FILE)
         self._release = client.register_script(RELEASE_LOCK)
@@ -217,11 +232,13 @@ class Store:
     async def abort_creation(self, token: str) -> None:
         await self.r.zrem(self.k("creating"), token)
 
-    async def register_sandbox(self, sandbox_id: str, token: str, egress: str = "") -> None:
+    async def register_sandbox(self, sandbox_id: str, token: str, egress: str = "",
+                               connections: str = "") -> None:
         await self._register(
             keys=[self.k("load"), self.k("state"), self.k("creating"), self.k("meta"),
                   self.k("sbxactive")],
-            args=[sandbox_id, token, json.dumps({"created_ms": now_ms(), "egress": egress}),
+            args=[sandbox_id, token, json.dumps({"created_ms": now_ms(), "egress": egress,
+                                   "connections": connections}),
                   now_ms()],
         )
 
@@ -234,13 +251,22 @@ class Store:
         if await self.r.hexists(self.k("state"), sandbox_id):
             await self.r.hset(self.k("meta"), sandbox_id, json.dumps(meta))
 
-    async def try_drain(self, sandbox_id: str) -> bool:
+    async def try_drain(self, sandbox_id: str, force: bool = False) -> bool:
         return int(await self._drain(keys=[self.k("load"), self.k("state")],
-                                     args=[sandbox_id])) == 1
+                                     args=[sandbox_id, "force" if force else ""])) == 1
+
+    async def retire_sandbox(self, sandbox_id: str) -> bool:
+        """Stop placing new users on it; users already there keep it until they go idle."""
+        return int(await self._retire(keys=[self.k("state"), self.k("retiring")],
+                                      args=[sandbox_id, now_ms()])) == 1
+
+    async def retiring_since_ms(self, sandbox_id: str) -> int:
+        v = await self.r.hget(self.k("retiring"), sandbox_id)
+        return int(_s(v)) if v else 0
 
     async def forget_sandbox(self, sandbox_id: str) -> None:
         await self._forget(keys=[self.k("load"), self.k("state"), self.k("meta"),
-                                 self.k("sbxactive")], args=[sandbox_id])
+                                 self.k("sbxactive"), self.k("retiring")], args=[sandbox_id])
 
     async def unbind(self, uid: str, sandbox_id: str) -> bool:
         return int(await self._unbind(

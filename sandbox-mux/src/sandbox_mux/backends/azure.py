@@ -100,6 +100,7 @@ class AzureSandboxBackend:
             auto_suspend_mode=p.auto_suspend_mode,
             labels=labels,
             egress_policy=build_egress_policy(p.egress),
+            connections=self._cfg.connectors.ids or None,
             polling_timeout=p.create_timeout_seconds,
         )
         sandbox = await poller.result()

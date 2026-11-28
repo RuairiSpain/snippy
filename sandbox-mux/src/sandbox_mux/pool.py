@@ -90,7 +90,8 @@ class PoolManager:
                     .replace("{limits_check}", bootstrap_check(self.cfg)))
                 if out.exit_code != 0:
                     raise RuntimeError(f"sandbox bootstrap failed: {out.stderr.strip()[:300]}")
-                await self.store.register_sandbox(sid, token, self.cfg.pool.egress.fingerprint())
+                await self.store.register_sandbox(sid, token, self.cfg.pool.egress.fingerprint(),
+                                                  self.cfg.connectors.fingerprint())
                 log.info("sandbox %s registered", sid)
             except BaseException:
                 await self.store.abort_creation(token)

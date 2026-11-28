@@ -79,6 +79,7 @@ class UserEnv:
         self.request_path = f"{self.req_dir}/turn.json"
         self.obo_path = f"{self.req_dir}/obo.json"
         self.bundle_path = f"{self.out_dir}/{self.BUNDLE}"
+        self.mcp_path = f"{self.req_dir}/mcp-config.json"
         self.outputs_dir = f"{self.home}/outputs"       # the agent writes results here
 
     def _q(self, v: str) -> str:
@@ -104,6 +105,9 @@ class UserEnv:
                "LANG": "C.UTF-8", **self.cfg.agent.env}
         if with_obo:
             env["OBO_TOKENS_FILE"] = self.obo_path
+        mcp_src = self.cfg.connectors.config_file if self.unix else None
+        if mcp_src:
+            env["MCP_CONFIG_FILE"] = self.mcp_path
         if self.cfg.files.enabled:
             env["OUTPUT_DIR"] = self.outputs_dir
         if with_inputs:
@@ -123,6 +127,12 @@ class UserEnv:
             "set -eu",
             limits.rstrip("\n"),
             f"install -d -o root -g {u} -m 0750 {self._q(self.req_dir)} {self._q(self.in_dir)}",
+        ]
+        if mcp_src:
+            # Root copies a platform-written file at a fixed configured path into the root-owned
+            # request directory. The user can read the copy but not change it.
+            lines.append(f"install -m 0640 -o root -g {u} {self._q(mcp_src)} {self._q(self.mcp_path)}")
+        lines += [
             f"chgrp -h {u} {' '.join(files)}",
             f"chmod 0640 {' '.join(files)}",
         ]

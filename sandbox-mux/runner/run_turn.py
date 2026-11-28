@@ -28,6 +28,16 @@ def obo_token(alias: str) -> str:
         return json.load(f)[alias]["access_token"]
 
 
+def mcp_config() -> dict | None:
+    """The MCP client configuration for the connectors attached to this sandbox, if the
+    operator set connectors.config_file. The format is whatever the platform wrote."""
+    path = os.environ.get("MCP_CONFIG_FILE")
+    if not path:
+        return None
+    with open(path, encoding="utf-8") as f:
+        return json.load(f)
+
+
 def input_files(request: dict) -> list[dict]:
     """Files the caller attached to this request, if any. Each has `name`, `path`, `size`,
     `sha256` and `content_type`. They are read-only and live in $INPUT_DIR for this turn

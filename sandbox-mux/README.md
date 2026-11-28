@@ -74,6 +74,62 @@ Idle compute cost is handled by the platform: each sandbox is created with
 `auto_suspend_seconds` and `auto_suspend_mode`, and `ensure_running` resumes it on demand.
 A shared sandbox only suspends when none of its users is active.
 
+## Connectors and MCP servers
+
+Container Apps Sandboxes connectors give a sandbox access to services such as SharePoint, Office
+365, Teams, GitHub or Jira, or to an MCP server, without OAuth flows or secrets inside the sandbox.
+You choose which ones every sandbox in the pool starts with:
+
+```yaml
+connectors:
+  available:                       # optional short names
+    sharepoint: /subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Web/connectorGateways/<ns>/mcpserverconfigs/office365Mcp
+  attach: [sharepoint]             # names or full resource IDs, up to 10
+```
+```bash
+SANDBOX_MUX_CONNECTORS=sharepoint,github        # names from `available`, or full IDs, comma separated
+```
+
+How the platform works (from its docs): a connector is first **attached to the sandbox group**
+(`aca sandboxgroup connector add --connection-id <id> --authorization system`, and the group needs an
+identity). Each sandbox then **opts in when it is created**, with up to 10 resource IDs that must
+already be on the group, and **the list cannot be changed afterwards**. This service passes
+`connections=[...]` on every sandbox it creates; it does not attach connectors to the group, which you
+do once with the CLI or the portal. MCP connector IDs end in `/mcpserverconfigs/<name>` and API
+connector IDs in `/connections/<name>`; IDs are validated at startup. If an ID is not on the group the
+service rejects sandbox creation, which shows in the logs and as HTTP 429 to users.
+
+**Because the list is fixed at creation, changing it replaces sandboxes.** Each sandbox is recorded
+with the list it was created under. When the configured list changes, the reaper leader retires the
+others: no new users are placed on them, users already there keep working, and a retired sandbox is
+deleted as soon as it is empty. After `retire_grace_seconds` (default 1 hour) it is deleted even if
+users are on it; they are placed on a new sandbox at their next request with an empty home (history
+is kept). A turn running at that moment fails and is retried once on the new sandbox, so the agent
+can run twice. The warm pool is rebuilt with the new list. This also means **removing a connector
+from the config removes access**, within the grace period, not only for new sandboxes.
+
+**Read this before attaching anything.** With `--authorization system`, a connector acts as the
+sandbox group's identity, using the account that granted consent, **not as the calling user**. Every
+user on every sandbox in the pool gets the same access, and sandboxes in a pool cannot have different
+connectors per user. Attach only what the whole pool is allowed to use, or run one pool (one service
+instance, one `pool.name`) per set of users. For access as the signed-in user, use On-Behalf-Of
+instead; the two combine (connectors for shared services, OBO for user-specific data).
+
+Making the tools visible to your agent: for Copilot disks the platform writes an MCP client config
+into the sandbox (documented as `/root/.copilot/mcp-config.json`). That file is under root, so the
+user's process cannot read it. If you set `connectors.config_file` to its path, root copies it into
+the user's root-owned request directory on each turn (read-only for the user) and the agent finds it at
+`$MCP_CONFIG_FILE` (`mcp_config()` in `runner/run_turn.py`). Requires `unix_user`.
+
+Not verified, because none of it can be tested without a real group and connector:
+* How non-root users inside a sandbox reach the connector endpoints (the docs describe access through
+  the group's managed identity but not through which mechanism), and whether the egress policy
+  (`pool.egress`) must allow them. With `egress.mode: disabled` they may be blocked.
+* Whether non-Copilot disks write an MCP config file at all.
+* Which tools a connector exposes and whether you can limit them per user. The service has a
+  per-connection policy-rules endpoint, which this project does not use.
+* The retirement logic is tested with the in-memory backend, not against the service.
+
 ## Files: upload inputs, download outputs
 
 Sandboxes are temporary (they are deleted when empty, drained, or lost), so files are kept in
@@ -319,6 +375,7 @@ your subscription quota still cap the total.
 | `src/sandbox_mux/reaper.py` | Leader-elected eviction, draining, reconciliation |
 | `src/sandbox_mux/backends/azure.py` | The only module that uses the sandbox SDK |
 | `src/sandbox_mux/backends/fake.py` | In-memory backend for tests and local dev |
+| `src/sandbox_mux/config.py` (`connectors`) | Which connectors and MCP servers each sandbox is created with |
 | `src/sandbox_mux/files.py`, `blobs.py` | User files: quota, names, safe archive handling; Azure Blob and local stores |
 | `src/sandbox_mux/obo.py` | Entra On-Behalf-Of exchange |
 | `src/sandbox_mux/api.py` | FastAPI app: invoke, history, end session, pool status |

@@ -56,6 +56,8 @@ class Reaper:
         await self.drain_empty_sandboxes()
         await self.reconcile()
         await self.reconcile_egress()
+        await self.retire_stale_connections()
+        await self.clean_up_retiring()
         if self.files:
             n = await self.files.purge_expired()
             if n:
@@ -108,6 +110,39 @@ class Reaper:
                     await self.store.forget_sandbox(sid)
                 except Exception:
                     log.exception("retry delete of %s failed", sid)
+
+    async def retire_stale_connections(self) -> None:
+        """A sandbox's connectors are fixed when it is created and cannot be edited, so a
+        sandbox created under a different connector list is retired: no new users are placed
+        on it, and it is deleted once empty (or after connectors.retire_grace_seconds).
+        New sandboxes, including the warm pool, then use the current list."""
+        want = self.cfg.connectors.fingerprint()
+        for sid, st in (await self.store.states()).items():
+            if st != "ready":
+                continue
+            if (await self.store.sandbox_meta(sid)).get("connections", "") != want:
+                if await self.store.retire_sandbox(sid):
+                    log.info("sandbox %s retired: created with a different connector list", sid)
+
+    async def clean_up_retiring(self) -> None:
+        grace_ms = self.cfg.connectors.retire_grace_seconds * 1000
+        loads = await self.store.loads()
+        for sid, st in (await self.store.states()).items():
+            if st != "retiring":
+                continue
+            expired = now_ms() - await self.store.retiring_since_ms(sid) >= grace_ms
+            if loads.get(sid, 0) != 0 and not expired:
+                continue
+            # Forced removal after the grace period: users still on it are placed on a new
+            # sandbox at their next request and start with an empty home.
+            if await self.store.try_drain(sid, force=expired):
+                try:
+                    await self.backend.delete(sid)
+                except Exception:
+                    log.exception("delete of retired sandbox %s failed; will retry", sid)
+                    continue
+                await self.store.forget_sandbox(sid)
+                log.info("retired sandbox %s deleted%s", sid, " (grace period over)" if expired else "")
 
     async def reconcile_egress(self) -> None:
         """Apply the configured egress policy to sandboxes created under a different one.
