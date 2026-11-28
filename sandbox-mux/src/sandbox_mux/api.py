@@ -236,6 +236,7 @@ def create_app(cfg: Config | None = None, *, backend=None, redis_client=None,
                     "creating": await st.creating_count(), "waiting": await st.waiting_count(),
                     "users_per_sandbox": c.pool.users_per_sandbox,
                     "max_sandboxes": c.pool.max_sandboxes, "egress": c.pool.egress.mode,
+                    "egress_connector_hosts": c.pool.egress.allow_connector_hosts,
                     "connectors": len(c.connectors.ids)}
         out = await one(app.state.ctx["store"], cfg)
         if app.state.ctx["triggers"] is not None:

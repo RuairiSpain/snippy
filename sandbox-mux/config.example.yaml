@@ -52,6 +52,8 @@ pool:
     # audit_only: false        # log decisions without blocking (to build an allowlist)
     # traffic_inspection: Full # Legacy | Partial | Full | None (service default when unset)
     # block_non_http: false    # also deny raw TCP/UDP. Verify HTTPS still works before enabling
+    # allow_connector_hosts: false   # also allow the hosts of this pool's connectors, read from the created sandbox
+    #                                # (mode disabled or allowlist; needs connectors attached to the pool)
 
 session:
   turn_timeout_seconds: 120

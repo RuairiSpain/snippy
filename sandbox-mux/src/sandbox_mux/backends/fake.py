@@ -33,6 +33,9 @@ class FakeSandboxBackend:
         self._ids = itertools.count(1)
         self.max_created = 0
         self.cfg = None            # set on a view made by with_config()
+        # What the "service" reports as a sandbox's connector endpoints. None derives one host per
+        # attached connection; a list (even empty) is returned as given.
+        self.gateway_hosts: list[str] | None = None
 
     def with_config(self, cfg) -> "_FakeView":
         return _FakeView(self, cfg)
@@ -50,6 +53,7 @@ class FakeSandboxBackend:
         if self.fail_next_create:
             self.fail_next_create = False
             raise RuntimeError("simulated create failure")
+        hosts = self._egress_hosts(cfg)        # raises, before anything is created, like the real one
         sid = f"sbx-{next(self._ids)}"
         self.sandboxes[sid] = {
             "state": "Running", "labels": dict(labels), "created": time.time(),
@@ -58,9 +62,26 @@ class FakeSandboxBackend:
             "egress_mode": cfg.pool.egress.mode if cfg else None,
             "egress_fp": cfg.pool.egress.fingerprint() if cfg else None,
             "connections": cfg.connectors.ids if cfg else None,
-            "limits": cfg.limits.mode if cfg else None}
+            "limits": cfg.limits.mode if cfg else None, "egress_hosts": hosts}
         self.max_created = max(self.max_created, len(self.sandboxes))
         return sid
+
+    def _connector_hosts(self, cfg) -> list[str]:
+        if self.gateway_hosts is not None:
+            return list(self.gateway_hosts)
+        return sorted(f"{i.rsplit('/', 1)[-1].lower()}.gateway.test" for i in (cfg.connectors.ids if cfg else []))
+
+    def _egress_hosts(self, cfg) -> list[str] | None:
+        if not cfg:
+            return None
+        e = cfg.pool.egress
+        hosts = list(e.allow_hosts)
+        if e.allow_connector_hosts and e.mode in ("disabled", "allowlist"):
+            found = self._connector_hosts(cfg)
+            if not found:
+                raise RuntimeError("the service reported no connector endpoints")
+            hosts += [h for h in found if h not in hosts]
+        return hosts
 
     def _need(self, sid: str) -> dict:
         if sid not in self.sandboxes:
@@ -102,8 +123,10 @@ class FakeSandboxBackend:
         self._need(sandbox_id)
         if self.fail_set_egress:
             raise RuntimeError("simulated egress failure")
+        hosts = self._egress_hosts(cfg)
         self.egress_applied.append(sandbox_id)
         if cfg:
+            self.sandboxes[sandbox_id]["egress_hosts"] = hosts
             self.sandboxes[sandbox_id]["egress_fp"] = cfg.pool.egress.fingerprint()
             self.sandboxes[sandbox_id]["egress_mode"] = cfg.pool.egress.mode
 

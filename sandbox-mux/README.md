@@ -496,6 +496,33 @@ default), not only new ones. `platform_default` cannot undo an earlier policy.
 If `obo.enabled`, egress `disabled` is rejected at startup, because the agent could not reach
 the downstream APIs. Use `allowlist` with their hosts (for example `graph.microsoft.com`).
 
+**Letting connectors through a deny policy: `allow_connector_hosts`.** A sandbox with connectors talks to the
+connector gateway's endpoint (an MCP or connection runtime URL). If you deny egress, you may need to allow that
+host, and the URLs are long, generated and per connection. With `egress.allow_connector_hosts: true` the service reads
+them for you:
+
+```yaml
+pool:
+  egress: {mode: disabled, allow_connector_hosts: true}    # or allowlist, to add your own hosts as well
+connectors: {attach: [sharepoint]}
+```
+
+* The sandbox is created under the strict policy (nothing from the connectors allowed), then the service reads the
+  endpoints the platform resolved for it (`gateway_connections`) and widens the policy to **exactly those hostnames**.
+  Only https URLs with a plain DNS name are used: no wildcards, no IP addresses, no other schemes.
+* **It fails closed.** If the platform reports no usable endpoint, creating the sandbox fails and the sandbox is
+  deleted, instead of leaving the connectors silently blocked or the policy open. The error says what to check.
+* It also applies to running sandboxes: turning the option on, or changing the connectors, updates existing sandboxes
+  on the next maintenance sweep (the policy fingerprint changes), and a failed update leaves the old policy and retries.
+* It needs `disabled` or `allowlist` (with `enabled` nothing is blocked) and connectors attached to *that pool*. The
+  triggers pool does not inherit the interactive pool's connectors, so it needs its own `triggers.pool.connectors`.
+  `GET /v1/pool/status` shows whether each pool uses it. Environment: `SANDBOX_MUX_EGRESS_CONNECTOR_HOSTS`.
+* Not verified: that passing `connections` when creating a sandbox makes the service fill in `gateway_connections`
+  (the first sandbox will tell you, because creation fails if it does not), and whether gateway traffic needs an allow
+  rule at all (the docs do not say). If it is exempt, the option does no harm: the extra rules are unused. To check,
+  create a sandbox under a deny policy, call a connector from inside it, and read its egress decisions
+  (`get_egress_decisions` in the SDK, or Network audit in the portal): the gateway host should be allowed, and nothing else.
+
 What this does not give you, and what I could not verify:
 
 * **Egress policy is per sandbox, not per user.** All users on a sandbox share it. Different

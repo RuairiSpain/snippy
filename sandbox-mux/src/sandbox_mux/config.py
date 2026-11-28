@@ -351,6 +351,11 @@ class EgressConfig(BaseModel):
     # Also deny raw TCP/UDP (non-HTTP). Off by default: not verified that HTTPS through the
     # egress proxy keeps working with it on. Test in your region before enabling.
     block_non_http: bool = False
+    # Also allow the hosts of the connector endpoints this sandbox was created with (the gateway's
+    # MCP and connection runtime URLs, as the service reports them). Exact hostnames only, read
+    # from the created sandbox. Works with `disabled` and `allowlist`. If the service reports no
+    # endpoint, creating the sandbox fails rather than leaving connectors silently blocked.
+    allow_connector_hosts: bool = False
 
     @field_validator("allow_hosts", mode="before")
     @classmethod
@@ -374,6 +379,9 @@ class EgressConfig(BaseModel):
             raise ValueError("egress.mode allowlist needs allow_hosts; use mode disabled to block all")
         if self.mode != "allowlist" and self.allow_hosts:
             raise ValueError("egress.allow_hosts is only used with egress.mode: allowlist")
+        if self.allow_connector_hosts and self.mode not in ("disabled", "allowlist"):
+            raise ValueError("egress.allow_connector_hosts only makes sense with mode disabled or "
+                             "allowlist: with enabled or platform_default nothing is blocked")
         return self
 
     def fingerprint(self) -> str:
@@ -546,6 +554,10 @@ class Config(BaseModel):
                 if bad:
                     raise ValueError(f"triggers.sources.{name}.allow_filters names unknown fields: {bad}")
             self.triggers_pool_cfg()        # raises if the triggers pool settings are invalid
+        if self.pool.egress.allow_connector_hosts and not self.connectors.ids:
+            raise ValueError("pool.egress.allow_connector_hosts is set but no connectors are attached "
+                             "to this pool (connectors.attach; for the triggers pool: "
+                             "triggers.pool.connectors)")
         if t.delegated_aliases and self.obo.enabled:
             unknown = [a for a in t.delegated_aliases if a not in self.obo.resources]
             if unknown:
@@ -667,6 +679,7 @@ ENV_ALIASES: dict[str, str] = {
     "USER_MEMORY": "limits.memory",
     "USER_PIDS": "limits.pids",
     "EGRESS_MODE": "pool.egress.mode",
+    "EGRESS_CONNECTOR_HOSTS": "pool.egress.allow_connector_hosts",
     "EGRESS_ALLOW_HOSTS": "pool.egress.allow_hosts",
 }
 

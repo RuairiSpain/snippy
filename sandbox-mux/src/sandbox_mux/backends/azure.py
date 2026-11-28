@@ -8,7 +8,10 @@ from __future__ import annotations
 
 import copy
 import datetime as dt
+import ipaddress
 import logging
+import re
+from urllib.parse import urlparse
 
 from azure.core.exceptions import HttpResponseError, ResourceNotFoundError
 from azure.containerapps.sandbox import endpoint_for_region, validate_egress_policy
@@ -37,8 +40,42 @@ def _to_epoch(value: object) -> float | None:
     return None
 
 
-def build_egress_policy(e: EgressConfig) -> EgressPolicy | None:
-    """Translate the config into an SDK policy. None means: send no policy."""
+_HOSTNAME = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$")
+
+
+def connector_hosts_from(sandbox) -> list[str]:
+    """Hostnames of the connector endpoints the service resolved for a sandbox.
+
+    These come from the service's response (`gateway_connections`: the MCP and connection runtime
+    URLs), not from anything a user supplies. Only exact DNS names on https URLs are kept: no
+    wildcards, no IP addresses, no other schemes."""
+    hosts: list[str] = []
+    for gc in getattr(sandbox, "gateway_connections", None) or []:
+        for url in (getattr(gc, "mcp_runtime_url", None), getattr(gc, "connection_runtime_url", None)):
+            if not url:
+                continue
+            try:
+                u = urlparse(url)
+                host = (u.hostname or "").lower()
+            except ValueError:
+                continue
+            if u.scheme != "https" or not _HOSTNAME.match(host):
+                continue
+            try:
+                ipaddress.ip_address(host)
+                continue                                  # an address, not a name
+            except ValueError:
+                pass
+            if host not in hosts:
+                hosts.append(host)
+    return sorted(hosts)
+
+
+def build_egress_policy(e: EgressConfig, connector_hosts: list[str] | None = None) -> EgressPolicy | None:
+    """Translate the config into an SDK policy. None means: send no policy.
+
+    `connector_hosts` are added as exact allow rules, but only when the config asks for it and the
+    mode is a deny-by-default one."""
     if e.mode == "platform_default":
         return None
     allow = e.mode == "enabled"
@@ -47,6 +84,13 @@ def build_egress_policy(e: EgressConfig) -> EgressPolicy | None:
                    action=EgressRuleAction(type="Allow"))
         for i, h in enumerate(e.allow_hosts, start=1)
     ]
+    if e.allow_connector_hosts and not allow:
+        listed = {h.lower() for h in e.allow_hosts}
+        rules += [
+            EgressRule(name=f"allow-connector-{i}", match=EgressRuleMatch(host=h),
+                       action=EgressRuleAction(type="Allow"))
+            for i, h in enumerate((h for h in connector_hosts or [] if h not in listed), start=1)
+        ]
     http = EgressHttpPolicy(
         default_action="Allow" if allow else "Deny",
         rules=rules,
@@ -117,7 +161,19 @@ class AzureSandboxBackend:
             polling_timeout=p.create_timeout_seconds,
         )
         sandbox = await poller.result()
-        return sandbox.sandbox_id
+        sid = sandbox.sandbox_id
+        if p.egress.allow_connector_hosts:
+            # The endpoints are only known once the sandbox exists. It starts under the strict
+            # policy above (nothing from the connectors allowed) and is widened to exactly them.
+            try:
+                await self.set_egress(sid)
+            except BaseException:
+                try:
+                    await self._c.delete_sandbox(sid)
+                except Exception:
+                    log.exception("could not delete %s after its egress policy failed", sid)
+                raise
+        return sid
 
     async def ensure_running(self, sandbox_id: str) -> None:
         try:
@@ -148,8 +204,26 @@ class AzureSandboxBackend:
         except ResourceNotFoundError:
             return b""
 
+    async def connector_hosts(self, sandbox_id: str) -> list[str]:
+        """The connector hosts the service resolved for this sandbox (empty if none)."""
+        try:
+            return connector_hosts_from(await self._c.get_sandbox(sandbox_id))
+        except ResourceNotFoundError as e:
+            raise SandboxGone(sandbox_id) from e
+
     async def set_egress(self, sandbox_id: str) -> None:
-        policy = build_egress_policy(self._cfg.pool.egress)
+        e = self._cfg.pool.egress
+        hosts: list[str] = []
+        if e.allow_connector_hosts and e.mode in ("disabled", "allowlist"):
+            hosts = await self.connector_hosts(sandbox_id)
+            if not hosts:
+                # Fail closed and loudly: continuing would leave the connectors blocked with no
+                # sign of why, or (if it fell back to the open policy) leave egress wide open.
+                raise RuntimeError(
+                    "egress.allow_connector_hosts is set, but the service reported no connector "
+                    f"endpoints for sandbox {sandbox_id}. Check the attached connections, or turn the "
+                    "option off and allow the gateway host by name.")
+        policy = build_egress_policy(e, hosts)
         if policy is None:
             return  # platform_default: there is no way to remove a policy, so leave it
         try:
