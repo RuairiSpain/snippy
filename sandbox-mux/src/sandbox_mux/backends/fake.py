@@ -24,6 +24,7 @@ class FakeSandboxBackend:
         self.sandboxes: dict[str, dict] = {}
         self.execs: list[tuple[str, str]] = []
         self.files: dict[tuple[str, str], bytes] = {}
+        self.modes: dict[tuple[str, str], str | None] = {}
         self.create_delay = create_delay
         self.fail_next_create = False
         self.handler = handler
@@ -68,9 +69,11 @@ class FakeSandboxBackend:
                                               "output_tokens": 1}), "")
         return ExecOutcome(0, "", "")
 
-    async def write_file(self, sandbox_id: str, path: str, data: bytes) -> None:
+    async def write_file(self, sandbox_id: str, path: str, data: bytes,
+                         mode: str | None = None) -> None:
         self._need(sandbox_id)
         self.files[(sandbox_id, path)] = data
+        self.modes[(sandbox_id, path)] = mode
 
     async def delete(self, sandbox_id: str) -> None:
         self.sandboxes.pop(sandbox_id, None)

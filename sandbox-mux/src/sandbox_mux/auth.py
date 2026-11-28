@@ -4,18 +4,22 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import jwt
 from fastapi import Header, HTTPException, Request
 
 from .config import AuthConfig
+from .obo import OboError, check_same_user, extract_assertion
 
 
 @dataclass(frozen=True)
 class Principal:
     tenant_id: str
     oid: str
+    # The caller's token, kept only for the On-Behalf-Of exchange. Excluded from repr and
+    # equality so it cannot leak through logging.
+    assertion: str | None = field(default=None, repr=False, compare=False)
 
     @property
     def uid(self) -> str:
@@ -33,7 +37,8 @@ class Authenticator:
                 f"https://login.microsoftonline.com/{cfg.tenant_id}/discovery/v2.0/keys",
                 cache_keys=True)
 
-    async def authenticate(self, authorization: str | None, dev_user: str | None) -> Principal:
+    async def authenticate(self, authorization: str | None, dev_user: str | None,
+                           assertion: str | None = None) -> Principal:
         if self.cfg.mode == "dev":
             if not dev_user:
                 raise HTTPException(401, "X-Dev-User header required in dev auth mode")
@@ -55,10 +60,18 @@ class Authenticator:
         oid, tid = claims.get("oid"), claims.get("tid")
         if not oid or tid != self.cfg.tenant_id:
             raise HTTPException(401, "Token has no oid or belongs to another tenant")
-        return Principal(tid, oid)
+        if assertion and assertion != token:
+            # Delegation token supplied in a different header: it must be the same user's.
+            try:
+                check_same_user(assertion, tid, oid)
+            except OboError as e:
+                raise HTTPException(e.status, e.detail) from e
+        return Principal(tid, oid, assertion=assertion or token)
 
 
 async def principal_dependency(request: Request,
                                authorization: str | None = Header(None),
                                x_dev_user: str | None = Header(None)) -> Principal:
-    return await request.app.state.auth.authenticate(authorization, x_dev_user)
+    obo = request.app.state.ctx["cfg"].obo
+    assertion = extract_assertion(request.headers, obo.assertion_header) if obo.enabled else None
+    return await request.app.state.auth.authenticate(authorization, x_dev_user, assertion)

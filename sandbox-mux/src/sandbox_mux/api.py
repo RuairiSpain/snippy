@@ -18,6 +18,7 @@ from .auth import Authenticator, Principal, principal_dependency
 from .backends import make_backend
 from .config import Config
 from .pool import PoolBusy, PoolManager
+from .obo import OboBroker, OboError
 from .reaper import Reaper
 from .service import AgentError, SessionService, TurnInProgress
 from .store import Store
@@ -29,6 +30,8 @@ CONV_ID = r"^[A-Za-z0-9_-]{1,64}$"
 class InvokeRequest(BaseModel):
     conversation_id: str = Field("default", pattern=CONV_ID)
     prompt: str
+    # Aliases from `obo.resources` whose delegated tokens the agent needs this turn.
+    obo_resources: list[str] = Field(default_factory=list, max_length=10)
 
 
 class InvokeResponse(BaseModel):
@@ -38,7 +41,7 @@ class InvokeResponse(BaseModel):
 
 
 def create_app(cfg: Config | None = None, *, backend=None, redis_client=None,
-               run_reaper: bool = True) -> FastAPI:
+               run_reaper: bool = True, obo_broker: OboBroker | None = None) -> FastAPI:
     cfg = cfg or Config.load()
 
     @contextlib.asynccontextmanager
@@ -51,7 +54,8 @@ def create_app(cfg: Config | None = None, *, backend=None, redis_client=None,
         pool = PoolManager(cfg, store, b)
         service = SessionService(cfg, store, b, pool)
         reaper = Reaper(cfg, store, b, pool, service)
-        app.state.ctx = dict(cfg=cfg, store=store, pool=pool, service=service)
+        app.state.ctx = dict(cfg=cfg, store=store, pool=pool, service=service,
+                             obo=obo_broker or (OboBroker(cfg) if cfg.obo.enabled else None))
         app.state.auth = Authenticator(cfg.auth)
         task = asyncio.create_task(reaper.run()) if run_reaper else None
         try:
@@ -75,8 +79,21 @@ def create_app(cfg: Config | None = None, *, backend=None, redis_client=None,
             raise HTTPException(422, "conversation_id must match " + CONV_ID)
         if not req.prompt.strip() or len(req.prompt) > cfg.session.max_prompt_chars:
             raise HTTPException(422, f"prompt must be 1..{cfg.session.max_prompt_chars} characters")
+        tokens = None
+        if req.obo_resources:
+            broker: OboBroker | None = app.state.ctx["obo"]
+            if broker is None:
+                raise HTTPException(422, "On-Behalf-Of is not enabled")
+            if not who.assertion:
+                raise HTTPException(401, f"No user token in the {cfg.obo.assertion_header} header")
+            try:
+                # Fail before taking a sandbox slot if the delegation cannot succeed.
+                tokens = await broker.tokens(who.assertion, req.obo_resources)
+            except OboError as e:
+                headers = {"X-Claims-Challenge": e.claims} if e.claims and e.status == 403 else None
+                raise HTTPException(e.status, e.detail, headers=headers) from e
         try:
-            res = await svc().run_turn(who.uid, req.conversation_id, req.prompt)
+            res = await svc().run_turn(who.uid, req.conversation_id, req.prompt, obo_tokens=tokens)
         except TurnInProgress:
             raise HTTPException(409, "A turn is already running for this user")
         except PoolBusy as e:

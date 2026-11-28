@@ -74,6 +74,72 @@ Idle compute cost is handled by the platform: each sandbox is created with
 `auto_suspend_seconds` and `auto_suspend_mode`, and `ensure_running` resumes it on demand.
 A shared sandbox only suspends when none of its users is active.
 
+## On-Behalf-Of: acting as the signed-in user
+
+With `obo.enabled`, a request can ask for delegated tokens, and the agent process (which
+already runs as that user's Unix account) can call downstream APIs as that Entra user:
+
+```http
+POST /v1/agent/invoke
+Authorization: Bearer <user token, audience = this service's app registration>
+
+{"prompt": "...", "obo_resources": ["graph"]}
+```
+
+1. The user's token is validated as usual, then exchanged with Entra's On-Behalf-Of flow
+   (MSAL `acquire_token_on_behalf_of`) for each requested alias in `obo.resources`.
+   Callers name aliases, never raw scopes, and at most `max_resources_per_turn` per request.
+2. The tokens are written to `$HOME/.agent/obo.json` with mode `0600`, owned by the user,
+   and the path is passed as `OBO_TOKENS_FILE`. They are not put in the command line or
+   environment (other users could see those), not stored in Redis, and not logged.
+3. The file is deleted right after the turn, including when the agent fails. If the delete
+   fails the error is logged, and the file remains readable by that user only until the
+   token expires or the session is wiped.
+4. If the exchange needs consent or step-up authentication, the API returns 403 with the
+   `X-Claims-Challenge` header and does not take a sandbox slot. Entra's error text is not
+   echoed to the caller.
+
+Which header? I could not confirm a Foundry-specific OBO header in the public docs. Sources
+disagree on whether Foundry's proxy forwards the user's token to the container at all, and
+`x-ms-user-isolation-key` only scopes per-user resources: it is not a delegated token. So
+the header is configurable (`obo.assertion_header`, default `Authorization`). If your front
+end forwards the user token under another name, set that name. A token in a different
+header from the one authenticated must belong to the same `oid` and tenant, or the request
+is rejected.
+
+Limits to be aware of:
+
+* The agent process, and anything it runs, can use and exfiltrate the token while the turn
+  runs. OBO narrows what it can do to what that user may do and what `obo.resources` allows;
+  it does not stop a misbehaving agent from misusing that access.
+* OBO requires `isolation.mode: unix_user` and `auth.mode: entra`; the config refuses to
+  start otherwise. With `home_only`, users share one UID and could read each other's tokens.
+* Egress policy is still per sandbox, so network access is shared even though identity is not.
+* The exchange needs a confidential client: a secret (`OBO_CLIENT_SECRET`), a certificate,
+  or a managed identity as a federated credential (`credential: managed_identity`, no secret
+  to rotate). The app registration needs the downstream delegated permissions and consent.
+* `obo_token(alias)` in `runner/run_turn.py` shows how an agent reads a token.
+
+## Timeouts and environment variables
+
+Foundry hosted sessions have a 15-minute idle timeout that the public docs describe as a
+platform behaviour, not a setting. Here every timeout is configurable, in the YAML file or
+from the environment (the environment wins). Values are validated at startup.
+
+| Variable | Setting | Effect |
+|---|---|---|
+| `SANDBOX_MUX_IDLE_TIMEOUT_SECONDS` | `pool.auto_suspend_seconds` | Platform suspends an idle sandbox (state kept, compute billing stops). Default 900 |
+| `SANDBOX_MUX_SESSION_TTL_SECONDS` | `session.user_idle_ttl_seconds` | Remove a user's session after this long idle: unbind, delete home. Default 3600 |
+| `SANDBOX_MUX_EMPTY_SANDBOX_TTL_SECONDS` | `pool.empty_ttl_seconds` | Delete a sandbox with no users (above `min_sandboxes`). Default 600 |
+| `SANDBOX_MUX_HISTORY_TTL_SECONDS` | `session.history_ttl_seconds` | Expire stored conversations. Default 7 days |
+| `SANDBOX_MUX_TURN_TIMEOUT_SECONDS` | `session.turn_timeout_seconds` | Kill a running agent turn |
+| `SANDBOX_MUX_QUEUE_TIMEOUT_SECONDS` | `session.queue_timeout_seconds` | Wait for capacity before HTTP 429 |
+| `SANDBOX_MUX_MIN_SANDBOXES`, `_MAX_SANDBOXES`, `_USERS_PER_SANDBOX` | `pool.*` | Pool shape |
+| `SANDBOX_MUX__<SECTION>__<KEY>` | any setting | e.g. `SANDBOX_MUX__POOL__STRATEGY=spread` |
+
+`SANDBOX_MUX_IDLE_TIMEOUT_SECONDS` is applied when a sandbox is created, so existing
+sandboxes keep the old value until they are replaced.
+
 ## Layout
 
 | Path | Purpose |
@@ -84,6 +150,7 @@ A shared sandbox only suspends when none of its users is active.
 | `src/sandbox_mux/reaper.py` | Leader-elected eviction, draining, reconciliation |
 | `src/sandbox_mux/backends/azure.py` | The only module that uses the sandbox SDK |
 | `src/sandbox_mux/backends/fake.py` | In-memory backend for tests and local dev |
+| `src/sandbox_mux/obo.py` | Entra On-Behalf-Of exchange |
 | `src/sandbox_mux/api.py` | FastAPI app: invoke, history, end session, pool status |
 | `runner/run_turn.py` | Example in-sandbox agent runner and its contract |
 | `infra/main.bicep` | Sandbox group, optional VNet connection, data-plane role assignment |
@@ -113,7 +180,7 @@ Prerequisites in Azure:
 
 | Method and path | Meaning |
 |---|---|
-| `POST /v1/agent/invoke` `{conversation_id, prompt}` | Run a turn. 409 if the user already has one running, 429 if the pool is full |
+| `POST /v1/agent/invoke` `{conversation_id, prompt, obo_resources}` | Run a turn. 409 if the user already has one running, 429 if the pool is full, 403 if OBO needs consent |
 | `GET /v1/conversations/{id}/messages` | Stored history |
 | `DELETE /v1/me/session` | Release the slot and delete the user's home |
 | `GET /v1/pool/status` | Loads, states, in-flight creations, waiters (admin OIDs only) |
@@ -127,6 +194,7 @@ Prerequisites in Azure:
   `list_sandboxes`, `delete_sandbox`) were checked against the installed package, but the
   behaviour against a live service has not been tested. All of it is confined to
   `backends/azure.py`.
+* **OBO is tested with a fake MSAL app, not against Entra.** The exchange, consent and claims-challenge handling follow MSAL's documented result shape but have not been run against a tenant.
 * **Not tested against real Azure.** The test suite uses the in-memory backend and
   fakeredis. The in-sandbox commands (`useradd`, `runuser`, `hidepid`) are built and
   checked for shape, not executed.

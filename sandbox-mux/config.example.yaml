@@ -1,4 +1,12 @@
 # Copy to config.yaml and point SANDBOX_MUX_CONFIG at it.
+# Any setting can be overridden from the environment (environment wins over this file):
+#   SANDBOX_MUX_IDLE_TIMEOUT_SECONDS    pool.auto_suspend_seconds   suspend an idle sandbox
+#   SANDBOX_MUX_SESSION_TTL_SECONDS     session.user_idle_ttl_seconds   remove an idle user's session
+#   SANDBOX_MUX_EMPTY_SANDBOX_TTL_SECONDS  pool.empty_ttl_seconds   delete an empty sandbox
+#   SANDBOX_MUX_HISTORY_TTL_SECONDS, _TURN_TIMEOUT_SECONDS, _QUEUE_TIMEOUT_SECONDS,
+#   SANDBOX_MUX_MIN_SANDBOXES, _MAX_SANDBOXES, _USERS_PER_SANDBOX
+#   SANDBOX_MUX__<SECTION>__<KEY>       anything else, e.g. SANDBOX_MUX__POOL__STRATEGY=spread
+#
 # Secrets do not belong here. Redis credentials come from the REDIS_URL
 # environment variable (redis.url below is only a fallback for local dev).
 
@@ -50,6 +58,21 @@ auth:
   tenant_id: "00000000-0000-0000-0000-000000000000"
   audience: "api://sandbox-mux"
   admin_oids: []               # object IDs allowed to call /v1/pool/status
+
+# On-Behalf-Of: let the agent call downstream APIs as the signed-in user.
+# Requires auth.mode: entra and isolation.mode: unix_user. The app registration needs the
+# downstream API permissions (delegated) and admin or user consent.
+obo:
+  enabled: false
+  client_id: "00000000-0000-0000-0000-000000000000"   # app registration behind auth.audience
+  credential: secret           # secret (env OBO_CLIENT_SECRET) | certificate | managed_identity
+  # certificate_path: /etc/sandbox-mux/obo.pem
+  # certificate_thumbprint: "..."
+  assertion_header: Authorization   # header carrying the user's token
+  max_resources_per_turn: 3
+  resources:                   # alias -> scopes. Callers request aliases, never raw scopes.
+    graph: ["https://graph.microsoft.com/.default"]
+    storage: ["https://storage.azure.com/user_impersonation"]
 
 redis:
   key_prefix: "smux"

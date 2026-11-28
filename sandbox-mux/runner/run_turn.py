@@ -14,7 +14,18 @@ the sandbox group's egress policy (credential injection) or an API gateway.
 """
 
 import json
+import os
 import sys
+
+
+def obo_token(alias: str) -> str:
+    """Delegated access token for a downstream API, acting as the calling user.
+
+    Present only when the request asked for it (`obo_resources`). The file is readable by
+    this user only and is deleted when the turn ends, so call this during the turn and do
+    not copy the token to disk. Use it as `Authorization: Bearer <token>`."""
+    with open(os.environ["OBO_TOKENS_FILE"], encoding="utf-8") as f:
+        return json.load(f)[alias]["access_token"]
 
 
 def main() -> int:

@@ -88,9 +88,10 @@ class AzureSandboxBackend:
             raise SandboxGone(sandbox_id) from e
         return ExecOutcome(int(r.exit_code), r.stdout or "", r.stderr or "")
 
-    async def write_file(self, sandbox_id: str, path: str, data: bytes) -> None:
+    async def write_file(self, sandbox_id: str, path: str, data: bytes,
+                         mode: str | None = None) -> None:
         try:
-            await self._c.get_sandbox_client(sandbox_id).write_file(path, data)
+            await self._c.get_sandbox_client(sandbox_id).write_file(path, data, mode=mode)
         except ResourceNotFoundError as e:
             raise SandboxGone(sandbox_id) from e
 

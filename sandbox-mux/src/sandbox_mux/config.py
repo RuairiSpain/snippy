@@ -72,6 +72,35 @@ class AuthConfig(BaseModel):
         return self
 
 
+class OboConfig(BaseModel):
+    """Entra On-Behalf-Of: exchange the caller's token for tokens to downstream APIs and
+    hand them to the agent process running as that user."""
+
+    enabled: bool = False
+    client_id: str = ""            # the app registration that `auth.audience` identifies
+    credential: Literal["secret", "certificate", "managed_identity"] = "secret"
+    # secret: read from the OBO_CLIENT_SECRET environment variable.
+    certificate_path: str | None = None        # PEM file containing the private key
+    certificate_thumbprint: str | None = None
+    # Header carrying the user's token. Authorization (Bearer) unless your front end
+    # forwards it elsewhere.
+    assertion_header: str = Field("Authorization", pattern=r"^[A-Za-z0-9-]+$")
+    # alias -> scopes. Callers may only request aliases listed here.
+    resources: dict[str, list[str]] = {}
+    max_resources_per_turn: int = Field(3, ge=1)
+
+    @model_validator(mode="after")
+    def _check(self) -> "OboConfig":
+        if self.enabled:
+            if not self.client_id:
+                raise ValueError("obo.client_id is required when obo.enabled is true")
+            if not self.resources:
+                raise ValueError("obo.resources must list at least one alias when obo is enabled")
+            if self.credential == "certificate" and not self.certificate_path:
+                raise ValueError("obo.certificate_path is required for credential: certificate")
+        return self
+
+
 class RedisConfig(BaseModel):
     url: str | None = None
     key_prefix: str = "smux"
@@ -91,6 +120,7 @@ class Config(BaseModel):
     isolation: IsolationConfig = IsolationConfig()
     agent: AgentConfig = AgentConfig()
     auth: AuthConfig = AuthConfig(mode="dev")
+    obo: OboConfig = OboConfig()
     redis: RedisConfig = RedisConfig()
 
     @model_validator(mode="after")
@@ -100,10 +130,61 @@ class Config(BaseModel):
                        if not getattr(self.azure, k)]
             if missing:
                 raise ValueError(f"azure.{', azure.'.join(missing)} required when backend is azure")
+        if self.obo.enabled:
+            if self.auth.mode != "entra":
+                raise ValueError("obo.enabled requires auth.mode: entra")
+            if self.isolation.mode != "unix_user":
+                raise ValueError(
+                    "obo.enabled requires isolation.mode: unix_user. With home_only every user "
+                    "shares one UID and could read other users' delegated tokens.")
         return self
 
     @classmethod
     def load(cls, path: str | os.PathLike[str] | None = None) -> "Config":
         path = Path(path or os.environ.get("SANDBOX_MUX_CONFIG", "config.yaml"))
         data = yaml.safe_load(path.read_text()) or {}
+        apply_env_overrides(data, os.environ)
         return cls.model_validate(data)
+
+
+# Short names for the settings operators change most. Each is read as SANDBOX_MUX_<NAME>.
+ENV_ALIASES: dict[str, str] = {
+    "IDLE_TIMEOUT_SECONDS": "pool.auto_suspend_seconds",        # suspend an idle sandbox
+    "SESSION_TTL_SECONDS": "session.user_idle_ttl_seconds",     # remove an idle user's session
+    "EMPTY_SANDBOX_TTL_SECONDS": "pool.empty_ttl_seconds",      # delete an empty sandbox
+    "HISTORY_TTL_SECONDS": "session.history_ttl_seconds",       # expire stored conversations
+    "TURN_TIMEOUT_SECONDS": "session.turn_timeout_seconds",
+    "QUEUE_TIMEOUT_SECONDS": "session.queue_timeout_seconds",
+    "MIN_SANDBOXES": "pool.min_sandboxes",
+    "MAX_SANDBOXES": "pool.max_sandboxes",
+    "USERS_PER_SANDBOX": "pool.users_per_sandbox",
+}
+
+
+def _set_path(data: dict, path: list[str], value: object) -> None:
+    for part in path[:-1]:
+        nxt = data.get(part)
+        if not isinstance(nxt, dict):
+            nxt = data[part] = {}
+        data = nxt
+    data[path[-1]] = value
+
+
+def apply_env_overrides(data: dict, env: "os._Environ[str] | dict[str, str]") -> None:
+    """Environment beats the YAML file. Two forms:
+
+    SANDBOX_MUX_IDLE_TIMEOUT_SECONDS=600        (a name from ENV_ALIASES)
+    SANDBOX_MUX__POOL__EMPTY_TTL_SECONDS=300    (any setting: SANDBOX_MUX__<SECTION>__<KEY>)
+
+    Values are parsed as YAML scalars (so `true`, `30` and `[a, b]` work) and then validated
+    by the config model, which rejects wrong types and out-of-range values at startup.
+    """
+    for name, dotted in ENV_ALIASES.items():
+        raw = env.get(f"SANDBOX_MUX_{name}")
+        if raw not in (None, ""):
+            _set_path(data, dotted.split("."), yaml.safe_load(raw))
+    for key, raw in env.items():
+        if key.startswith("SANDBOX_MUX__") and raw != "":
+            parts = [p.lower() for p in key[len("SANDBOX_MUX__"):].split("__") if p]
+            if parts:
+                _set_path(data, parts, yaml.safe_load(raw))

@@ -49,6 +49,7 @@ class UserEnv:
         self.user = username(uid)
         self.home = f"{cfg.isolation.home_root.rstrip('/')}/{self.user}"
         self.request_path = f"{self.home}/.agent/turn.json"
+        self.obo_path = f"{self.home}/.agent/obo.json"
         self.unix = cfg.isolation.mode == "unix_user"
 
     def provision(self) -> str:
@@ -62,19 +63,25 @@ class UserEnv:
                     f"install -d -o {u} -g {u} -m 700 {sub}\n")
         return f"set -eu\ninstall -d -m 700 {h} {sub}\n"
 
-    def run_turn(self) -> str:
+    def run_turn(self, with_obo: bool = False) -> str:
         u, h = shlex.quote(self.user), shlex.quote(self.home)
         env = {"HOME": self.home, "USER": self.user, "LOGNAME": self.user,
                "TMPDIR": f"{self.home}/tmp", "PATH": "/usr/local/bin:/usr/bin:/bin",
                "LANG": "C.UTF-8", **self.cfg.agent.env}
+        if with_obo:
+            env["OBO_TOKENS_FILE"] = self.obo_path
         env_args = " ".join(f"{k}={shlex.quote(v)}" for k, v in env.items())
         argv = " ".join(shlex.quote(a) for a in self.cfg.agent.command)
         req = shlex.quote(self.request_path)
         t = self.cfg.session.turn_timeout_seconds
         runner = f"timeout -k 5 {t} env -i {env_args} {argv} {req}"
         if self.unix:
-            return f"set -eu\nchown {u}:{u} {req}\ncd {h}\nexec runuser -u {u} -- {runner}\n"
+            own = f"{req} {shlex.quote(self.obo_path)}" if with_obo else req
+            return f"set -eu\nchown {u}:{u} {own}\ncd {h}\nexec runuser -u {u} -- {runner}\n"
         return f"set -eu\ncd {h}\nexec {runner}\n"
+
+    def drop_obo(self) -> str:
+        return f"rm -f {shlex.quote(self.obo_path)}\n"
 
     def wipe(self) -> str:
         u, h = shlex.quote(self.user), shlex.quote(self.home)
@@ -86,7 +93,8 @@ class SessionService:
     def __init__(self, cfg: Config, store: Store, backend: SandboxBackend, pool: PoolManager) -> None:
         self.cfg, self.store, self.backend, self.pool = cfg, store, backend, pool
 
-    async def run_turn(self, uid: str, conversation_id: str, prompt: str) -> TurnResult:
+    async def run_turn(self, uid: str, conversation_id: str, prompt: str,
+                       obo_tokens: dict | None = None) -> TurnResult:
         s = self.cfg.session
         # Turns stay inside the sandbox timeout plus margin for provisioning and resume.
         lock_ttl = s.turn_timeout_seconds + self.cfg.pool.create_timeout_seconds + 60
@@ -101,7 +109,7 @@ class SessionService:
             try:
                 for attempt in (1, 2):
                     try:
-                        return await self._turn(uid, conversation_id, prompt, span)
+                        return await self._turn(uid, conversation_id, prompt, span, obo_tokens)
                     except SandboxGone as e:
                         # The sandbox disappeared. Its users' homes went with it; forget it and
                         # place the user again once.
@@ -123,7 +131,8 @@ class SessionService:
                 tm.turn_duration.record(time.monotonic() - started, {"outcome": outcome})
                 await self.store.release_lock(f"lock:user:{uid}", token)
 
-    async def _turn(self, uid: str, conv: str, prompt: str, span) -> TurnResult:
+    async def _turn(self, uid: str, conv: str, prompt: str, span,
+                    obo_tokens: dict | None = None) -> TurnResult:
         s = self.cfg.session
         t0 = time.monotonic()
         sid, _ = await self.pool.acquire(uid)
@@ -145,11 +154,20 @@ class SessionService:
         request = {"conversation_id": conv, "messages": [*history, user_msg]}
         await self.backend.write_file(sid, env.request_path, json.dumps(request).encode())
 
+        if obo_tokens:
+            # 0600, readable only by the user once the run command chowns it. The token is
+            # not placed in the command line or environment, which other users could see.
+            await self.backend.write_file(sid, env.obo_path, json.dumps(obo_tokens).encode(),
+                                          mode="600")
         try:
-            out = await asyncio.wait_for(self.backend.exec(sid, env.run_turn()),
-                                         s.turn_timeout_seconds + 30)
+            out = await asyncio.wait_for(
+                self.backend.exec(sid, env.run_turn(with_obo=bool(obo_tokens))),
+                s.turn_timeout_seconds + 30)
         except asyncio.TimeoutError as e:
             raise AgentError("Agent turn timed out") from e
+        finally:
+            if obo_tokens:
+                await self._drop_obo(sid, env)
         if out.exit_code != 0:
             raise AgentError("Agent process failed", f"exit {out.exit_code}: {out.stderr[-500:]}")
 
@@ -165,6 +183,16 @@ class SessionService:
         tm.input_tokens.add(i)
         tm.output_tokens.add(o)
         return TurnResult(result["reply"], sid, i, o)
+
+    async def _drop_obo(self, sid: str, env: UserEnv) -> None:
+        """Delete the delegated tokens. A failure is logged loudly: the file stays readable
+        by the user until it expires and until the session is wiped."""
+        try:
+            out = await asyncio.shield(self.backend.exec(sid, env.drop_obo()))
+            if out.exit_code != 0:
+                log.error("could not delete OBO token file on %s: %s", sid, out.stderr[-200:])
+        except Exception:
+            log.exception("could not delete OBO token file on %s", sid)
 
     async def end_session(self, uid: str) -> bool:
         """Unbind the user and delete their home. Called by the API and by the reaper."""

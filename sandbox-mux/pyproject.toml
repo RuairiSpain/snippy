@@ -17,6 +17,7 @@ dependencies = [
     "azure-identity>=1.16",
     "azure-containerapps-sandbox>=1.0.0b1",
     "opentelemetry-api>=1.24",
+    "msal>=1.28",
 ]
 
 [project.optional-dependencies]
