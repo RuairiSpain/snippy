@@ -1,0 +1,141 @@
+# sandbox-mux
+
+A session manager that serves many users from a bounded pool of Azure Container Apps
+Sandboxes (`Microsoft.App/sandboxGroups`). It adds the parts of Foundry hosted agent
+sessions that the raw sandbox API does not provide: per-user identity and isolation,
+conversation state, idle handling, routing, and telemetry.
+
+Instead of one sandbox per user, each sandbox hosts several users. Each user gets a Unix
+account with a private `$HOME`. Pool size, users per sandbox and placement strategy are in
+a config file. All shared state is in Redis, so any number of replicas can serve requests.
+
+```
+client ──Entra token──▶ replica 1 ─┐
+                        replica 2 ─┼─▶ Redis (placement, locks, history)
+                        replica N ─┘        │
+                                            ▼
+                   ┌──────────── sandbox group ────────────┐
+                   │ sandbox A: u1 u2 u3   sandbox B: u4 u5 │  (max_sandboxes, users_per_sandbox)
+                   └─────────────────────────────────────────┘
+```
+
+## Is multiplexing users onto shared sandboxes possible?
+
+Yes, and this project does it. Three constraints shape the design.
+
+**1. `$HOME` separation alone is not isolation.** Users who share a Unix UID can read each
+other's directories regardless of `$HOME`. `isolation.mode: unix_user` (the default)
+therefore creates one Unix account per user (`useradd`, home mode `0700`) and runs every
+turn as that account with `runuser` and a cleared environment (`env -i`). `home_only` mode
+only sets `$HOME`; use it for tests or for users who fully trust each other.
+
+**2. Users on one sandbox still share a kernel, network identity and egress policy.**
+Unix accounts stop file and process snooping between users, but they are not a hypervisor
+boundary like the one between sandboxes. A kernel exploit, a noisy neighbour exhausting CPU
+or memory, or a user abusing a shared egress credential affects everyone on that sandbox.
+The sandbox egress policy and any injected credentials apply to the whole sandbox, so you
+cannot give two users on one sandbox different network permissions. Multiplex only users
+who share a trust level. For separate trust levels, run one pool per tenant (a different
+`pool.name`, optionally a different sandbox group).
+
+**3. A user's files live on one sandbox, so routing is sticky.** A request cannot go to
+"any idle sandbox", because the user's `$HOME` exists only where it was created. A user is
+bound to a sandbox when they first need a slot and stays bound until they are idle longer
+than `session.user_idle_ttl_seconds` (or call `DELETE /v1/me/session`). The binding is
+released and the home directory deleted at that point. Load balancing therefore happens at
+binding time (`pack` or `spread`), not per request. If a user's sandbox disappears, they
+are rebound to another one with an empty home; conversation history survives because it is
+in Redis. Making homes durable would need a shared volume or snapshots, which this
+project does not implement.
+
+## How placement works
+
+All of it runs in Lua scripts in `store.py`, so replicas cannot disagree:
+
+* **assign**: returns the user's existing sandbox; otherwise picks a ready sandbox with a
+  free slot (`pack`: fullest first, which minimizes the number of sandboxes; `spread`:
+  least loaded first); otherwise registers the user as a waiter.
+* **create**: a replica is told to create a sandbox only when waiting users exceed what the
+  sandboxes already being created can absorb, and the count of existing plus in-flight
+  sandboxes is below `max_sandboxes`. A burst of 20 users with 5 slots per sandbox creates
+  4 sandboxes, not 20.
+* **full**: waiting users poll for `session.queue_timeout_seconds`, then get HTTP 429 with
+  `Retry-After`.
+* **per-user lock**: one turn per user at a time (HTTP 409 otherwise), held across replicas
+  with a token, so a turn and an eviction cannot interleave.
+
+The reaper runs in every replica but only the replica holding the Redis `leader` lock acts.
+It evicts idle users (wiping their home), deletes sandboxes that stayed empty for
+`pool.empty_ttl_seconds` while keeping `pool.min_sandboxes`, keeps the warm pool filled,
+and reconciles Redis with the real sandbox list (forgets sandboxes that vanished, deletes
+orphans left by a replica that crashed mid-creation).
+
+Idle compute cost is handled by the platform: each sandbox is created with
+`auto_suspend_seconds` and `auto_suspend_mode`, and `ensure_running` resumes it on demand.
+A shared sandbox only suspends when none of its users is active.
+
+## Layout
+
+| Path | Purpose |
+|---|---|
+| `src/sandbox_mux/store.py` | Redis state and the atomic placement scripts |
+| `src/sandbox_mux/pool.py` | Acquire a slot, create and bootstrap sandboxes, warm pool |
+| `src/sandbox_mux/service.py` | One turn: lock, place, resume, provision user, run agent, persist history |
+| `src/sandbox_mux/reaper.py` | Leader-elected eviction, draining, reconciliation |
+| `src/sandbox_mux/backends/azure.py` | The only module that uses the sandbox SDK |
+| `src/sandbox_mux/backends/fake.py` | In-memory backend for tests and local dev |
+| `src/sandbox_mux/api.py` | FastAPI app: invoke, history, end session, pool status |
+| `runner/run_turn.py` | Example in-sandbox agent runner and its contract |
+| `infra/main.bicep` | Sandbox group, optional VNet connection, data-plane role assignment |
+| `config.example.yaml` | All settings |
+
+## Run it
+
+```bash
+pip install -e ".[dev]" && pytest                       # no Azure or Redis needed
+cp config.example.yaml config.yaml                      # fill in the azure section
+export REDIS_URL=rediss://...
+az login                                                # or use a managed identity
+python -m sandbox_mux.main
+```
+
+Prerequisites in Azure:
+
+1. Deploy `infra/main.bicep`, giving it the object ID of the identity the manager runs as
+   (it gets *Container Apps SandboxGroup Data Owner*).
+2. Build a sandbox disk image that contains the agent runner (see `runner/run_turn.py` for
+   the contract) and set `pool.disk_id`. Exec must run as root inside the sandbox: the
+   bootstrap check fails the sandbox otherwise.
+3. Set `auth.tenant_id` and `auth.audience` to your Entra app registration. Dev mode
+   (`X-Dev-User` header) trusts the caller and is for local use only.
+
+## API
+
+| Method and path | Meaning |
+|---|---|
+| `POST /v1/agent/invoke` `{conversation_id, prompt}` | Run a turn. 409 if the user already has one running, 429 if the pool is full |
+| `GET /v1/conversations/{id}/messages` | Stored history |
+| `DELETE /v1/me/session` | Release the slot and delete the user's home |
+| `GET /v1/pool/status` | Loads, states, in-flight creations, waiters (admin OIDs only) |
+| `GET /healthz`, `GET /readyz` | Liveness and Redis readiness |
+
+## Known limits and things to verify
+
+* **Preview SDK.** `azure-containerapps-sandbox` is a community preview (1.0.0b1) and the
+  API version is `2026-09-01-preview`. The calls used (`SandboxGroupClient`,
+  `begin_create_sandbox`, `get_sandbox_client(...).exec/write_file/ensure_running`,
+  `list_sandboxes`, `delete_sandbox`) were checked against the installed package, but the
+  behaviour against a live service has not been tested. All of it is confined to
+  `backends/azure.py`.
+* **Not tested against real Azure.** The test suite uses the in-memory backend and
+  fakeredis. The in-sandbox commands (`useradd`, `runuser`, `hidepid`) are built and
+  checked for shape, not executed.
+* **Egress and secrets.** Egress policy is per sandbox. Do not put model keys in the image
+  or agent environment; use the group's egress credential injection or a gateway. This
+  project does not configure egress policies.
+* **Waiting uses polling** with jittered backoff, not Redis pub/sub.
+* **Redis Cluster** is not supported: the Lua scripts touch keys that do not share a hash
+  slot. Use a single primary (Azure Cache for Redis Standard/Premium, non-clustered).
+* **Exec output size and runaway processes** rely on `timeout` inside the sandbox and the
+  overall `turn_timeout_seconds`. There are no per-user CPU or memory limits (no cgroups or
+  ulimits yet), so one user can starve others on the same sandbox.
