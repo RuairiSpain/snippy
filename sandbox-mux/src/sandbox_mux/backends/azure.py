@@ -128,6 +128,12 @@ class AzureSandboxBackend:
         except ResourceNotFoundError as e:
             raise SandboxGone(sandbox_id) from e
 
+    async def read_file(self, sandbox_id: str, path: str) -> bytes:
+        try:
+            return await self._c.get_sandbox_client(sandbox_id).read_file(path)
+        except ResourceNotFoundError:
+            return b""
+
     async def set_egress(self, sandbox_id: str) -> None:
         policy = build_egress_policy(self._cfg.pool.egress)
         if policy is None:

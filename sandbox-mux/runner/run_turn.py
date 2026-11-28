@@ -28,6 +28,20 @@ def obo_token(alias: str) -> str:
         return json.load(f)[alias]["access_token"]
 
 
+def input_files(request: dict) -> list[dict]:
+    """Files the caller attached to this request, if any. Each has `name`, `path`, `size`,
+    `sha256` and `content_type`. They are read-only and live in $INPUT_DIR for this turn
+    only; copy what you need into $HOME."""
+    return request.get("input_files", [])
+
+
+def output_dir() -> str:
+    """Write files you want to return to the caller here ($OUTPUT_DIR). Regular files only,
+    in this directory or below it. They are collected after the turn and the directory is
+    emptied, so each turn returns only its own files."""
+    return os.environ["OUTPUT_DIR"]
+
+
 def main() -> int:
     with open(sys.argv[1], encoding="utf-8") as f:
         request = json.load(f)

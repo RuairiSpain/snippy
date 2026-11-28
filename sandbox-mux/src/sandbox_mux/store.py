@@ -132,6 +132,19 @@ redis.call('ZREM', KEYS[4], ARGV[1])
 return 1
 """
 
+# KEYS: 1 userfiles hash (id -> bytes), 2 pending zset
+# ARGV: id, bytes, max_bytes, max_files, pending_expiry_ms, pending_member
+# Reserve quota before accepting an upload so concurrent uploads cannot overshoot it.
+RESERVE_FILE = """
+if redis.call('HLEN', KEYS[1]) >= tonumber(ARGV[4]) then return 'files' end
+local total = 0
+for _, v in ipairs(redis.call('HVALS', KEYS[1])) do total = total + tonumber(v) end
+if total + tonumber(ARGV[2]) > tonumber(ARGV[3]) then return 'bytes' end
+redis.call('HSET', KEYS[1], ARGV[1], ARGV[2])
+redis.call('ZADD', KEYS[2], ARGV[5], ARGV[6])
+return 'ok'
+"""
+
 RELEASE_LOCK = """
 if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) end
 return 0
@@ -165,6 +178,7 @@ class Store:
         self._unbind = client.register_script(UNBIND)
         self._drain = client.register_script(DRAIN)
         self._forget = client.register_script(FORGET)
+        self._reserve_file = client.register_script(RESERVE_FILE)
         self._release = client.register_script(RELEASE_LOCK)
         self._renew = client.register_script(RENEW_LOCK)
 
@@ -285,6 +299,61 @@ class Store:
 
     async def renew_lock(self, name: str, token: str, ttl_s: float) -> bool:
         return int(await self._renew(keys=[self.k(name)], args=[token, int(ttl_s * 1000)])) == 1
+
+    # ---- file records and quota ---------------------------------------------------
+
+    async def reserve_file(self, uid: str, fid: str, size: int, *, max_bytes: int,
+                           max_files: int, pending_ttl_s: int = 900) -> str:
+        """'ok', 'files' (count quota) or 'bytes' (size quota)."""
+        r = await self._reserve_file(
+            keys=[self.k(f"userfiles:{uid}"), self.k("files:pending")],
+            args=[fid, size, max_bytes, max_files, now_ms() + pending_ttl_s * 1000, f"{uid}:{fid}"])
+        return _s(r)
+
+    async def commit_file(self, record: dict, expires_ms: int) -> None:
+        uid, fid = record["uid"], record["id"]
+        async with self.r.pipeline(transaction=True) as p:
+            p.set(self.k(f"file:{fid}"), json.dumps(record))
+            p.hset(self.k(f"userfiles:{uid}"), fid, record["size"])
+            p.zadd(self.k("files:expiry"), {f"{uid}:{fid}": expires_ms})
+            p.zrem(self.k("files:pending"), f"{uid}:{fid}")
+            await p.execute()
+
+    async def release_file(self, uid: str, fid: str) -> None:
+        """Give back a reservation whose upload failed."""
+        async with self.r.pipeline(transaction=True) as p:
+            p.hdel(self.k(f"userfiles:{uid}"), fid)
+            p.zrem(self.k("files:pending"), f"{uid}:{fid}")
+            await p.execute()
+
+    async def get_file(self, fid: str) -> dict | None:
+        raw = await self.r.get(self.k(f"file:{fid}"))
+        return json.loads(_s(raw)) if raw else None
+
+    async def delete_file_record(self, uid: str, fid: str) -> None:
+        async with self.r.pipeline(transaction=True) as p:
+            p.delete(self.k(f"file:{fid}"))
+            p.hdel(self.k(f"userfiles:{uid}"), fid)
+            p.zrem(self.k("files:expiry"), f"{uid}:{fid}")
+            p.zrem(self.k("files:pending"), f"{uid}:{fid}")
+            await p.execute()
+
+    async def user_file_ids(self, uid: str) -> list[str]:
+        return sorted(_s(k) for k in await self.r.hkeys(self.k(f"userfiles:{uid}")))
+
+    async def user_usage(self, uid: str) -> tuple[int, int]:
+        """(files, bytes) counted against the user's quota, reservations included."""
+        vals = await self.r.hvals(self.k(f"userfiles:{uid}"))
+        return len(vals), sum(int(v) for v in vals)
+
+    async def due_files(self, limit: int = 100) -> list[str]:
+        """Members `uid:fid` whose retention has passed."""
+        return [_s(m) for m in await self.r.zrangebyscore(
+            self.k("files:expiry"), "-inf", now_ms(), start=0, num=limit)]
+
+    async def stale_reservations(self, limit: int = 100) -> list[str]:
+        return [_s(m) for m in await self.r.zrangebyscore(
+            self.k("files:pending"), "-inf", now_ms(), start=0, num=limit)]
 
     # ---- conversation history ----------------------------------------------------
 

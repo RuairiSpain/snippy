@@ -23,9 +23,10 @@ _UNITS = {"": 1, "K": 10**3, "M": 10**6, "G": 10**9, "T": 10**12,
 
 
 def parse_size(text: str) -> int:
-    """Bytes in a quantity like 512Mi, 4Gi, 2G or a plain number of bytes."""
+    """Bytes in a quantity like 512Mi, 4Gi, 2G, 100MB or a plain number of bytes.
+    K, M, G, T are decimal (100MB = 100,000,000 bytes); Ki, Mi, Gi, Ti are binary."""
     import re
-    m = re.fullmatch(r"(\d+(?:\.\d+)?)(Ki|Mi|Gi|Ti|K|M|G|T)?", text.strip())
+    m = re.fullmatch(r"(\d+(?:\.\d+)?)\s*(Ki|Mi|Gi|Ti|K|M|G|T)?B?", text.strip())
     if not m:
         raise ValueError(f"invalid size {text!r}")
     return int(float(m.group(1)) * _UNITS[m.group(2) or ""])
@@ -35,6 +36,60 @@ def parse_cpu(text: str) -> float:
     """Cores in a quantity like 2, 1.5 or 2000m."""
     t = text.strip()
     return float(t[:-1]) / 1000 if t.endswith("m") else float(t)
+
+
+class FilesConfig(BaseModel):
+    """Upload of input files and download of output files, kept in storage that outlives
+    sandboxes. Sizes accept 100MB, 100Mi, 2GB, or a number of bytes."""
+
+    enabled: bool = False
+    store: Literal["azure_blob", "local"] = "azure_blob"
+    account_url: str | None = None                 # https://<account>.blob.core.windows.net
+    container: str = Field("smux-files", pattern=r"^[a-z0-9][a-z0-9-]{2,62}$")
+    local_path: str = "./data/files"               # store: local (development and tests)
+    max_file_size: str = "100MB"                   # per file, uploaded or produced by the agent
+    max_user_total_size: str = "2GB"               # all of one user's stored files
+    max_files_per_user: int = Field(500, ge=1)
+    max_input_files_per_turn: int = Field(10, ge=1)
+    max_output_files_per_turn: int = Field(20, ge=1)
+    max_output_size_per_turn: str = "200MB"        # total bytes the agent may return in one turn
+    retention_days: int = Field(7, ge=1)
+    max_concurrent_transfers: int = Field(4, ge=1) # whole files are held in memory per transfer
+
+    @field_validator("max_file_size", "max_user_total_size", "max_output_size_per_turn",
+                     mode="before")
+    @classmethod
+    def _size_text(cls, v: object) -> object:
+        return str(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else v
+
+    @field_validator("max_file_size", "max_user_total_size", "max_output_size_per_turn")
+    @classmethod
+    def _size_ok(cls, v: str) -> str:
+        if parse_size(v) <= 0:
+            raise ValueError("size must be greater than zero")
+        return v
+
+    @property
+    def file_bytes(self) -> int:
+        return parse_size(self.max_file_size)
+
+    @property
+    def user_total_bytes(self) -> int:
+        return parse_size(self.max_user_total_size)
+
+    @property
+    def turn_output_bytes(self) -> int:
+        return parse_size(self.max_output_size_per_turn)
+
+    @model_validator(mode="after")
+    def _check(self) -> "FilesConfig":
+        if self.file_bytes > self.user_total_bytes:
+            raise ValueError("files.max_file_size is larger than files.max_user_total_size")
+        if self.turn_output_bytes < self.file_bytes:
+            raise ValueError("files.max_output_size_per_turn must be at least files.max_file_size")
+        if self.enabled and self.store == "azure_blob" and not self.account_url:
+            raise ValueError("files.account_url is required for files.store: azure_blob")
+        return self
 
 
 class LimitsConfig(BaseModel):
@@ -167,6 +222,9 @@ class SessionConfig(BaseModel):
 class IsolationConfig(BaseModel):
     mode: Literal["unix_user", "home_only"] = "unix_user"
     home_root: str = Field("/home", pattern=r"^/[A-Za-z0-9_./-]*$")
+    # Root-owned area inside the sandbox for files the manager hands to, or collects from,
+    # a user's process. Users cannot write to it, which stops symlink tricks.
+    state_root: str = Field("/var/lib/smux", pattern=r"^/[A-Za-z0-9_./-]*$")
 
 
 class AgentConfig(BaseModel):
@@ -234,6 +292,7 @@ class Config(BaseModel):
     session: SessionConfig = SessionConfig()
     isolation: IsolationConfig = IsolationConfig()
     limits: LimitsConfig = LimitsConfig()
+    files: FilesConfig = FilesConfig()
     agent: AgentConfig = AgentConfig()
     auth: AuthConfig = AuthConfig(mode="dev")
     obo: OboConfig = OboConfig()
@@ -246,6 +305,9 @@ class Config(BaseModel):
                        if not getattr(self.azure, k)]
             if missing:
                 raise ValueError(f"azure.{', azure.'.join(missing)} required when backend is azure")
+        if self.files.enabled and self.isolation.mode != "unix_user":
+            raise ValueError("files.enabled requires isolation.mode: unix_user. Without separate "
+                             "accounts the sandbox cannot keep one user's files from another.")
         lim = self.limits
         if lim.mode == "ulimit" and self.isolation.mode != "unix_user":
             raise ValueError("limits.mode ulimit needs isolation.mode unix_user (limits are per UID)")
@@ -303,6 +365,10 @@ ENV_ALIASES: dict[str, str] = {
     "CPU": "pool.cpu",
     "MEMORY": "pool.memory",
     "DISK_SIZE": "pool.disk_size",
+    "FILES_ENABLED": "files.enabled",
+    "MAX_FILE_SIZE": "files.max_file_size",
+    "MAX_USER_STORAGE": "files.max_user_total_size",
+    "FILE_RETENTION_DAYS": "files.retention_days",
     "LIMITS_MODE": "limits.mode",
     "USER_CPU": "limits.cpu",
     "USER_MEMORY": "limits.memory",

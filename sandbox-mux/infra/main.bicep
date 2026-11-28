@@ -22,6 +22,17 @@ param useVnet bool = false
 param vnetAddressPrefix string = '10.0.0.0/16'
 param subnetAddressPrefix string = '10.0.0.0/23'
 
+@description('Create a storage account for user files (sandbox-mux files.enabled).')
+param enableFiles bool = false
+
+@description('Globally unique storage account name (3-24 lowercase letters and digits).')
+param storageAccountName string = 'smux${uniqueString(resourceGroup().id)}'
+
+param filesContainerName string = 'smux-files'
+
+@description('Blobs are deleted this many days after the last write, as a backstop to the service\'s own purge.')
+param filesRetentionDays int = 8
+
 // Container Apps SandboxGroup Data Owner
 var dataOwnerRoleId = 'c24cf47c-5077-412d-a19c-45202126392c'
 
@@ -74,5 +85,65 @@ resource dataOwner 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   }
 }
 
+// ---- user files (optional) ------------------------------------------------------------------
+
+// Storage Blob Data Contributor
+var blobContributorRoleId = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
+
+resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' = if (enableFiles) {
+  name: storageAccountName
+  location: location
+  sku: { name: 'Standard_LRS' }
+  kind: 'StorageV2'
+  properties: {
+    allowBlobPublicAccess: false
+    allowSharedKeyAccess: false      // managed identity only
+    minimumTlsVersion: 'TLS1_2'
+    supportsHttpsTrafficOnly: true
+  }
+}
+
+resource blobService 'Microsoft.Storage/storageAccounts/blobServices@2023-05-01' = if (enableFiles) {
+  parent: storage
+  name: 'default'
+}
+
+resource filesContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = if (enableFiles) {
+  parent: blobService
+  name: filesContainerName
+  properties: { publicAccess: 'None' }
+}
+
+resource filesLifecycle 'Microsoft.Storage/storageAccounts/managementPolicies@2023-05-01' = if (enableFiles) {
+  parent: storage
+  name: 'default'
+  properties: {
+    policy: {
+      rules: [
+        {
+          name: 'expire-user-files'
+          enabled: true
+          type: 'Lifecycle'
+          definition: {
+            filters: { blobTypes: ['blockBlob'] }
+            actions: { baseBlob: { delete: { daysAfterModificationGreaterThan: filesRetentionDays } } }
+          }
+        }
+      ]
+    }
+  }
+}
+
+resource filesAccess 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (enableFiles) {
+  name: guid(storage.id, orchestratorPrincipalId, blobContributorRoleId)
+  scope: storage
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', blobContributorRoleId)
+    principalId: orchestratorPrincipalId
+    principalType: orchestratorPrincipalType
+  }
+}
+
 output sandboxGroupName string = sandboxGroup.name
+output filesAccountUrl string = enableFiles ? 'https://${storageAccountName}.blob.${environment().suffixes.storage}' : ''
 output sandboxGroupId string = sandboxGroup.id

@@ -85,15 +85,18 @@ async def test_tokens_reach_only_the_users_file_and_are_deleted(make_client):
     uid = Principal(TENANT, "o1").uid
     env = UserEnv(obo_cfg(), uid)
     sid = r.json()["sandbox_id"]
-    # Written owner-only, with the delegated token in it.
-    assert backend.modes[(sid, env.obo_path)] == "600"
+    # Root-owned file in a root-owned directory, readable by the user's private group only.
+    assert backend.modes[(sid, env.obo_path)] == "640"
     assert b"AT-https://graph.microsoft.com/.default" in backend.files[(sid, env.obo_path)]
     cmds = [c for _, c in backend.execs]
     # The token never appears in a command line (visible to other users via ps).
     assert not any("AT-https" in c for c in cmds)
     run = next(c for c in cmds if "runuser" in c)
     assert f"OBO_TOKENS_FILE={env.obo_path}" in run
-    assert f"chown {env.user}:{env.user} {env.request_path} {env.obo_path}" in run
+    # Root-owned directory, group-readable by the user only; root never chowns a path the
+    # user controls.
+    assert env.obo_path.startswith("/var/lib/smux/req/") and "chown" not in run
+    assert f"chgrp -h {env.user} {env.request_path} {env.obo_path}" in run
     # And the file is removed straight after the turn.
     assert cmds[-1].strip() == f"rm -f {env.obo_path}"
 

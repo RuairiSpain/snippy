@@ -40,6 +40,9 @@ class SandboxBackend(Protocol):
     async def write_file(self, sandbox_id: str, path: str, data: bytes,
                          mode: str | None = None) -> None: ...
 
+    async def read_file(self, sandbox_id: str, path: str) -> bytes:
+        """File contents, or b"" if the file does not exist."""
+
     async def set_egress(self, sandbox_id: str) -> None:
         """Apply the currently configured egress policy to an existing sandbox."""
 

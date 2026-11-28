@@ -19,9 +19,11 @@ log = logging.getLogger(__name__)
 
 class Reaper:
     def __init__(self, cfg: Config, store: Store, backend: SandboxBackend,
-                 pool: PoolManager, service: SessionService, interval_s: float = 30.0) -> None:
+                 pool: PoolManager, service: SessionService, interval_s: float = 30.0,
+                 files=None) -> None:
         self.cfg, self.store, self.backend = cfg, store, backend
         self.pool, self.service, self.interval = pool, service, interval_s
+        self.files = files
         self._token: str | None = None
         self._stop = asyncio.Event()
 
@@ -54,6 +56,10 @@ class Reaper:
         await self.drain_empty_sandboxes()
         await self.reconcile()
         await self.reconcile_egress()
+        if self.files:
+            n = await self.files.purge_expired()
+            if n:
+                log.info("purged %d expired files", n)
         await self.pool.warm()
 
     async def evict_idle_users(self) -> None:

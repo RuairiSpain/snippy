@@ -61,7 +61,7 @@ class FakeSandboxBackend:
         self.execs.append((sandbox_id, command))
         if self.handler and (r := self.handler(sandbox_id, command)):
             return r
-        if "runuser" in command or ("turn.json" in command and "timeout" in command):
+        if "exec runuser" in command or ("turn.json" in command and "timeout" in command):
             m = re.search(r"(/\S*turn\.json)", command)
             req = {}
             if m and (sandbox_id, m.group(1).strip("'")) in self.files:
@@ -76,6 +76,10 @@ class FakeSandboxBackend:
         self._need(sandbox_id)
         self.files[(sandbox_id, path)] = data
         self.modes[(sandbox_id, path)] = mode
+
+    async def read_file(self, sandbox_id: str, path: str) -> bytes:
+        self._need(sandbox_id)
+        return self.files.get((sandbox_id, path), b"")
 
     async def set_egress(self, sandbox_id: str) -> None:
         self._need(sandbox_id)

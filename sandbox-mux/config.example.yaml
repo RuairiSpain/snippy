@@ -7,6 +7,7 @@
 #   SANDBOX_MUX_HISTORY_TTL_SECONDS, _TURN_TIMEOUT_SECONDS, _QUEUE_TIMEOUT_SECONDS,
 #   SANDBOX_MUX_MIN_SANDBOXES, _MAX_SANDBOXES, _USERS_PER_SANDBOX
 #   SANDBOX_MUX_CPU, _MEMORY, _DISK_SIZE   size of each sandbox
+#   SANDBOX_MUX_FILES_ENABLED, _MAX_FILE_SIZE, _MAX_USER_STORAGE, _FILE_RETENTION_DAYS   file storage
 #   SANDBOX_MUX_LIMITS_MODE, _USER_CPU, _USER_MEMORY, _USER_PIDS   per-user limits
 #   SANDBOX_MUX_EGRESS_MODE, _EGRESS_ALLOW_HOSTS (comma separated)   outbound network policy
 #   SANDBOX_MUX__<SECTION>__<KEY>       anything else, e.g. SANDBOX_MUX__POOL__STRATEGY=spread
@@ -60,6 +61,20 @@ limits:                        # per-user ceilings inside a shared sandbox (not 
   # memory: 1Gi                # hard cap, no swap          env: SANDBOX_MUX_USER_MEMORY
   # pids: 256                  # processes and threads      env: SANDBOX_MUX_USER_PIDS
   # Size so that users_per_sandbox x limit is at most the sandbox size (pool.cpu, pool.memory).
+
+files:                         # upload inputs, download outputs; stored outside the sandboxes
+  enabled: false               # needs isolation.mode: unix_user
+  store: azure_blob            # azure_blob | local (local is for development)
+  account_url: "https://mystorageaccount.blob.core.windows.net"   # managed identity needs Storage Blob Data Contributor
+  container: smux-files
+  max_file_size: 100MB         # per file, in either direction   env: SANDBOX_MUX_MAX_FILE_SIZE
+  max_user_total_size: 2GB     # everything one user has stored   env: SANDBOX_MUX_MAX_USER_STORAGE
+  max_files_per_user: 500
+  max_input_files_per_turn: 10
+  max_output_files_per_turn: 20
+  max_output_size_per_turn: 200MB   # archive size, including 512 bytes of header per file
+  retention_days: 7            # env: SANDBOX_MUX_FILE_RETENTION_DAYS
+  max_concurrent_transfers: 4  # whole files are held in memory while being moved
 
 isolation:
   mode: unix_user              # unix_user | home_only (see README: home_only is NOT a security boundary)

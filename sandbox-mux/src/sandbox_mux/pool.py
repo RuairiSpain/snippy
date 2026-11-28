@@ -32,6 +32,8 @@ set -eu
 [ "$(id -u)" = 0 ] || { echo "exec user is not root" >&2; exit 3; }
 mkdir -p {home_root}
 chmod 711 {home_root}
+install -d -o root -g root -m 0755 {state_root} {state_root}/req {state_root}/in
+install -d -o root -g root -m 0700 {state_root}/out
 # Best effort: hide other users' processes from each other.
 mount -o remount,hidepid=2 /proc 2>/dev/null || true
 {limits_check}"""
@@ -84,6 +86,7 @@ class PoolManager:
                                              self.cfg.pool.create_timeout_seconds + 30)
                 out = await self.backend.exec(
                     sid, BOOTSTRAP.replace("{home_root}", shlex.quote(self.cfg.isolation.home_root))
+                    .replace("{state_root}", shlex.quote(self.cfg.isolation.state_root.rstrip("/")))
                     .replace("{limits_check}", bootstrap_check(self.cfg)))
                 if out.exit_code != 0:
                     raise RuntimeError(f"sandbox bootstrap failed: {out.stderr.strip()[:300]}")

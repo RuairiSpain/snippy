@@ -18,6 +18,8 @@ dependencies = [
     "azure-containerapps-sandbox>=1.0.0b1",
     "opentelemetry-api>=1.24",
     "msal>=1.28",
+    "azure-storage-blob>=12.19",
+    "aiohttp>=3.9",
 ]
 
 [project.optional-dependencies]

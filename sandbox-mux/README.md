@@ -74,6 +74,85 @@ Idle compute cost is handled by the platform: each sandbox is created with
 `auto_suspend_seconds` and `auto_suspend_mode`, and `ensure_running` resumes it on demand.
 A shared sandbox only suspends when none of its users is active.
 
+## Files: upload inputs, download outputs
+
+Sandboxes are temporary (they are deleted when empty, drained, or lost), so files are kept in
+durable storage that the service owns, and a sandbox only holds a copy for the length of one
+turn. Enable with `files.enabled: true` (requires `isolation.mode: unix_user`).
+
+```bash
+# upload (raw body; the name is a query parameter). 413 if over the limit, 409 over quota.
+curl -X POST "$HOST/v1/files?name=data.csv" -H "Authorization: Bearer $T" \
+     -H "Content-Type: text/csv" --data-binary @data.csv          # -> {"file_id": "...", ...}
+
+# use it in a turn; results come back in the response
+curl -X POST $HOST/v1/agent/invoke -H "Authorization: Bearer $T" -H "Content-Type: application/json" \
+     -d '{"prompt": "summarise it", "inputs": ["<file_id>"]}'
+# -> {"reply": "...", "outputs": [{"file_id": "...", "name": "summary.md", "size": 912, "sha256": "..."}],
+#     "skipped_outputs": []}
+
+curl -O -J "$HOST/v1/files/<file_id>" -H "Authorization: Bearer $T"      # download
+# also: GET /v1/files, GET /v1/files/{id}/metadata, DELETE /v1/files/{id}
+```
+
+**Inside the sandbox**, the agent finds attached files in `$INPUT_DIR` (also listed as
+`input_files` in the request JSON) and writes anything it wants to return into `$OUTPUT_DIR`
+(`$HOME/outputs`). Inputs are read-only and removed after the turn. After a successful turn the
+service collects the regular files in `$OUTPUT_DIR`, stores them, and empties the directory, so
+each turn returns only its own files.
+
+**Size limits (all in YAML under `files:`, or env):**
+
+| Setting | Env | Default |
+|---|---|---|
+| `max_file_size` per file, uploaded or produced | `SANDBOX_MUX_MAX_FILE_SIZE` | `100MB` |
+| `max_user_total_size` per user | `SANDBOX_MUX_MAX_USER_STORAGE` | `2GB` |
+| `retention_days` | `SANDBOX_MUX_FILE_RETENTION_DAYS` | `7` |
+| `max_files_per_user`, `max_input_files_per_turn`, `max_output_files_per_turn` | generic form | 500, 10, 20 |
+| `max_output_size_per_turn` (archive size) | generic form | `200MB` |
+
+`100MB` is 100,000,000 bytes; `100MiB` is 104,857,600. Any setting can also use
+`SANDBOX_MUX__FILES__<KEY>`. The limit is enforced while the body streams, so an oversized upload
+is refused (413) without being stored, and a quota is reserved before the upload starts, so
+concurrent uploads cannot overshoot it. Whole files are held in memory while moving to or from a
+sandbox (`max_concurrent_transfers` bounds how many at once), so raise `max_file_size` together
+with the service's memory. I found no documented size limit for the sandbox file API: test
+your largest file size before relying on it.
+
+**Why files never live in the sandbox.** Besides durability, there is a security reason. The
+data-plane file calls and the setup scripts run as root, and a user can replace anything under
+their own home with a symlink. So root never reads, writes or changes ownership of a path the
+user controls:
+
+* Requests, delegated tokens and input files are placed in `/var/lib/smux/{req,in}/<user>/`,
+  owned by root with read access for the user's private group only. The user's process can read
+  them but cannot modify, replace or delete them.
+* Outputs are archived by a process running **as the user**, so the kernel applies that user's
+  permissions to whatever a link points at. Only regular files are listed (`find -type f` skips
+  symlinks), and the archive is written into a root-owned directory by the manager's shell.
+* The archive is untrusted: it is read in memory and never extracted to disk. Only plain files
+  with safe relative paths are accepted; links, absolute paths and `..` are skipped and reported
+  in `skipped_outputs`. Output names are flattened to one component and made unique.
+* Downloads are always `attachment` with `nosniff` and `Content-Security-Policy: sandbox`, so agent
+  output is never rendered in the service's origin. Other users' files return 404.
+
+**Retention and cleanup.** The reaper deletes files after `retention_days` and returns the
+quota of uploads that never finished. `infra/main.bicep` (`enableFiles`) also creates the
+storage account (no public access, no shared keys), the container, a lifecycle rule as a
+backstop, and the *Storage Blob Data Contributor* role for the service identity.
+
+**Not in this version:**
+* **Direct-to-storage upload links.** Files go through the service so the size limit and quota
+  can be enforced exactly (a storage upload link cannot cap the size). Large files cost service
+  bandwidth and memory. Direct links with a post-upload size check are a possible follow-up.
+* **Resuming a user's `$HOME` on another sandbox** after eviction (archive and restore).
+* **Malware scanning.** Enable Defender for Storage on the account if you need it.
+* If collecting outputs fails after the agent ran, the turn still succeeds and the failure is
+  listed in `skipped_outputs`; the agent is never re-run to retry collection.
+* The Azure Blob store and the Bicep have not been run against a real account (the Azure store is
+  written against the installed SDK; tests use a local store). The security scripts are tested
+  against a temporary directory with planted symlinks, but not as real root with real accounts.
+
 ## Per-user CPU, memory and process limits
 
 Users in one sandbox share its CPU and memory, so without limits one user can starve the
@@ -240,6 +319,7 @@ your subscription quota still cap the total.
 | `src/sandbox_mux/reaper.py` | Leader-elected eviction, draining, reconciliation |
 | `src/sandbox_mux/backends/azure.py` | The only module that uses the sandbox SDK |
 | `src/sandbox_mux/backends/fake.py` | In-memory backend for tests and local dev |
+| `src/sandbox_mux/files.py`, `blobs.py` | User files: quota, names, safe archive handling; Azure Blob and local stores |
 | `src/sandbox_mux/obo.py` | Entra On-Behalf-Of exchange |
 | `src/sandbox_mux/api.py` | FastAPI app: invoke, history, end session, pool status |
 | `runner/run_turn.py` | Example in-sandbox agent runner and its contract |
@@ -273,6 +353,7 @@ Prerequisites in Azure:
 | `POST /v1/agent/invoke` `{conversation_id, prompt, obo_resources}` | Run a turn. 409 if the user already has one running, 429 if the pool is full, 403 if OBO needs consent |
 | `GET /v1/conversations/{id}/messages` | Stored history |
 | `DELETE /v1/me/session` | Release the slot and delete the user's home |
+| `POST /v1/files?name=`, `GET /v1/files`, `GET /v1/files/{id}`, `GET /v1/files/{id}/metadata`, `DELETE /v1/files/{id}` | Files (see above) |
 | `GET /v1/pool/status` | Loads, states, in-flight creations, waiters (admin OIDs only) |
 | `GET /healthz`, `GET /readyz` | Liveness and Redis readiness |
 
