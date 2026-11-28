@@ -1,0 +1,43 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "sandbox-mux"
+version = "0.1.0"
+description = "Session manager that multiplexes users onto a bounded pool of Azure Container Apps sandboxes"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "pydantic>=2.6",
+    "pyyaml>=6.0",
+    "redis>=5.0",
+    "pyjwt[crypto]>=2.8",
+    "azure-identity>=1.16",
+    "azure-containerapps-sandbox>=1.0.0b1",
+    "opentelemetry-api>=1.24",
+    "msal>=1.28",
+    "azure-storage-blob>=12.19",
+    "aiohttp>=3.9",
+]
+
+[project.optional-dependencies]
+otel = ["azure-monitor-opentelemetry>=1.6"]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.23",
+    "fakeredis>=2.23",
+    "lupa>=2.0",
+    "httpx>=0.27",
+    "asgi-lifespan>=2.1",
+    "pytest-timeout>=2.3",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sandbox_mux"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]

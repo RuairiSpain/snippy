@@ -1,0 +1,381 @@
+# sandbox-mux
+
+A session manager that serves many users from a bounded pool of Azure Container Apps
+Sandboxes (`Microsoft.App/sandboxGroups`). It adds the parts of Foundry hosted agent
+sessions that the raw sandbox API does not provide: per-user identity and isolation,
+conversation state, idle handling, routing, and telemetry.
+
+Instead of one sandbox per user, each sandbox hosts several users. Each user gets a Unix
+account with a private `$HOME`. Pool size, users per sandbox and placement strategy are in
+a config file. All shared state is in Redis, so any number of replicas can serve requests.
+
+```
+client ──Entra token──▶ replica 1 ─┐
+                        replica 2 ─┼─▶ Redis (placement, locks, history)
+                        replica N ─┘        │
+                                            ▼
+                   ┌──────────── sandbox group ────────────┐
+                   │ sandbox A: u1 u2 u3   sandbox B: u4 u5 │  (max_sandboxes, users_per_sandbox)
+                   └─────────────────────────────────────────┘
+```
+
+## Is multiplexing users onto shared sandboxes possible?
+
+Yes, and this project does it. Three constraints shape the design.
+
+**1. `$HOME` separation alone is not isolation.** Users who share a Unix UID can read each
+other's directories regardless of `$HOME`. `isolation.mode: unix_user` (the default)
+therefore creates one Unix account per user (`useradd`, home mode `0700`) and runs every
+turn as that account with `runuser` and a cleared environment (`env -i`). `home_only` mode
+only sets `$HOME`; use it for tests or for users who fully trust each other.
+
+**2. Users on one sandbox still share a kernel, network identity and egress policy.**
+Unix accounts stop file and process snooping between users, but they are not a hypervisor
+boundary like the one between sandboxes. A kernel exploit, a noisy neighbour exhausting CPU
+or memory, or a user abusing a shared egress credential affects everyone on that sandbox.
+The sandbox egress policy and any injected credentials apply to the whole sandbox, so you
+cannot give two users on one sandbox different network permissions. Multiplex only users
+who share a trust level. For separate trust levels, run one pool per tenant (a different
+`pool.name`, optionally a different sandbox group).
+
+**3. A user's files live on one sandbox, so routing is sticky.** A request cannot go to
+"any idle sandbox", because the user's `$HOME` exists only where it was created. A user is
+bound to a sandbox when they first need a slot and stays bound until they are idle longer
+than `session.user_idle_ttl_seconds` (or call `DELETE /v1/me/session`). The binding is
+released and the home directory deleted at that point. Load balancing therefore happens at
+binding time (`pack` or `spread`), not per request. If a user's sandbox disappears, they
+are rebound to another one with an empty home; conversation history survives because it is
+in Redis. Making homes durable would need a shared volume or snapshots, which this
+project does not implement.
+
+## How placement works
+
+All of it runs in Lua scripts in `store.py`, so replicas cannot disagree:
+
+* **assign**: returns the user's existing sandbox; otherwise picks a ready sandbox with a
+  free slot (`pack`: fullest first, which minimizes the number of sandboxes; `spread`:
+  least loaded first); otherwise registers the user as a waiter.
+* **create**: a replica is told to create a sandbox only when waiting users exceed what the
+  sandboxes already being created can absorb, and the count of existing plus in-flight
+  sandboxes is below `max_sandboxes`. A burst of 20 users with 5 slots per sandbox creates
+  4 sandboxes, not 20.
+* **full**: waiting users poll for `session.queue_timeout_seconds`, then get HTTP 429 with
+  `Retry-After`.
+* **per-user lock**: one turn per user at a time (HTTP 409 otherwise), held across replicas
+  with a token, so a turn and an eviction cannot interleave.
+
+The reaper runs in every replica but only the replica holding the Redis `leader` lock acts.
+It evicts idle users (wiping their home), deletes sandboxes that stayed empty for
+`pool.empty_ttl_seconds` while keeping `pool.min_sandboxes`, keeps the warm pool filled,
+and reconciles Redis with the real sandbox list (forgets sandboxes that vanished, deletes
+orphans left by a replica that crashed mid-creation).
+
+Idle compute cost is handled by the platform: each sandbox is created with
+`auto_suspend_seconds` and `auto_suspend_mode`, and `ensure_running` resumes it on demand.
+A shared sandbox only suspends when none of its users is active.
+
+## Files: upload inputs, download outputs
+
+Sandboxes are temporary (they are deleted when empty, drained, or lost), so files are kept in
+durable storage that the service owns, and a sandbox only holds a copy for the length of one
+turn. Enable with `files.enabled: true` (requires `isolation.mode: unix_user`).
+
+```bash
+# upload (raw body; the name is a query parameter). 413 if over the limit, 409 over quota.
+curl -X POST "$HOST/v1/files?name=data.csv" -H "Authorization: Bearer $T" \
+     -H "Content-Type: text/csv" --data-binary @data.csv          # -> {"file_id": "...", ...}
+
+# use it in a turn; results come back in the response
+curl -X POST $HOST/v1/agent/invoke -H "Authorization: Bearer $T" -H "Content-Type: application/json" \
+     -d '{"prompt": "summarise it", "inputs": ["<file_id>"]}'
+# -> {"reply": "...", "outputs": [{"file_id": "...", "name": "summary.md", "size": 912, "sha256": "..."}],
+#     "skipped_outputs": []}
+
+curl -O -J "$HOST/v1/files/<file_id>" -H "Authorization: Bearer $T"      # download
+# also: GET /v1/files, GET /v1/files/{id}/metadata, DELETE /v1/files/{id}
+```
+
+**Inside the sandbox**, the agent finds attached files in `$INPUT_DIR` (also listed as
+`input_files` in the request JSON) and writes anything it wants to return into `$OUTPUT_DIR`
+(`$HOME/outputs`). Inputs are read-only and removed after the turn. After a successful turn the
+service collects the regular files in `$OUTPUT_DIR`, stores them, and empties the directory, so
+each turn returns only its own files.
+
+**Size limits (all in YAML under `files:`, or env):**
+
+| Setting | Env | Default |
+|---|---|---|
+| `max_file_size` per file, uploaded or produced | `SANDBOX_MUX_MAX_FILE_SIZE` | `100MB` |
+| `max_user_total_size` per user | `SANDBOX_MUX_MAX_USER_STORAGE` | `2GB` |
+| `retention_days` | `SANDBOX_MUX_FILE_RETENTION_DAYS` | `7` |
+| `max_files_per_user`, `max_input_files_per_turn`, `max_output_files_per_turn` | generic form | 500, 10, 20 |
+| `max_output_size_per_turn` (archive size) | generic form | `200MB` |
+
+`100MB` is 100,000,000 bytes; `100MiB` is 104,857,600. Any setting can also use
+`SANDBOX_MUX__FILES__<KEY>`. The limit is enforced while the body streams, so an oversized upload
+is refused (413) without being stored, and a quota is reserved before the upload starts, so
+concurrent uploads cannot overshoot it. Whole files are held in memory while moving to or from a
+sandbox (`max_concurrent_transfers` bounds how many at once), so raise `max_file_size` together
+with the service's memory. I found no documented size limit for the sandbox file API: test
+your largest file size before relying on it.
+
+**Why files never live in the sandbox.** Besides durability, there is a security reason. The
+data-plane file calls and the setup scripts run as root, and a user can replace anything under
+their own home with a symlink. So root never reads, writes or changes ownership of a path the
+user controls:
+
+* Requests, delegated tokens and input files are placed in `/var/lib/smux/{req,in}/<user>/`,
+  owned by root with read access for the user's private group only. The user's process can read
+  them but cannot modify, replace or delete them.
+* Outputs are archived by a process running **as the user**, so the kernel applies that user's
+  permissions to whatever a link points at. Only regular files are listed (`find -type f` skips
+  symlinks), and the archive is written into a root-owned directory by the manager's shell.
+* The archive is untrusted: it is read in memory and never extracted to disk. Only plain files
+  with safe relative paths are accepted; links, absolute paths and `..` are skipped and reported
+  in `skipped_outputs`. Output names are flattened to one component and made unique.
+* Downloads are always `attachment` with `nosniff` and `Content-Security-Policy: sandbox`, so agent
+  output is never rendered in the service's origin. Other users' files return 404.
+
+**Retention and cleanup.** The reaper deletes files after `retention_days` and returns the
+quota of uploads that never finished. `infra/main.bicep` (`enableFiles`) also creates the
+storage account (no public access, no shared keys), the container, a lifecycle rule as a
+backstop, and the *Storage Blob Data Contributor* role for the service identity.
+
+**Not in this version:**
+* **Direct-to-storage upload links.** Files go through the service so the size limit and quota
+  can be enforced exactly (a storage upload link cannot cap the size). Large files cost service
+  bandwidth and memory. Direct links with a post-upload size check are a possible follow-up.
+* **Resuming a user's `$HOME` on another sandbox** after eviction (archive and restore).
+* **Malware scanning.** Enable Defender for Storage on the account if you need it.
+* If collecting outputs fails after the agent ran, the turn still succeeds and the failure is
+  listed in `skipped_outputs`; the agent is never re-run to retry collection.
+* The Azure Blob store and the Bicep have not been run against a real account (the Azure store is
+  written against the installed SDK; tests use a local store). The security scripts are tested
+  against a temporary directory with planted symlinks, but not as real root with real accounts.
+
+## Per-user CPU, memory and process limits
+
+Users in one sandbox share its CPU and memory, so without limits one user can starve the
+others. `limits` caps each user's whole process tree:
+
+```yaml
+pool: {cpu: "4", memory: 8Gi, users_per_sandbox: 4}
+limits: {mode: cgroup, cpu: 1, memory: 2Gi, pids: 256}
+```
+
+* **`cgroup` (recommended).** One Linux cgroup v2 group per user: `cpu.max` (CPU is
+  throttled, not killed), `memory.max` with swap disabled (the kernel OOM-kills only that
+  user's processes), and `pids.max` (fork bombs stop at the limit). The turn script puts its
+  shell into the user's cgroup before `exec runuser`, so the agent and everything it spawns
+  inherit it.
+* **`ulimit` (fallback).** Process count per user, and an address-space cap that applies per
+  process, not in total. No CPU limit. Many runtimes (Python, Node, JVM) reserve large address
+  ranges, so `memory` can break them; prefer `cgroup`.
+* Limits are ceilings, not reservations. If `users_per_sandbox` times a limit exceeds the
+  sandbox size (for example 4 users at 4Gi in an 8Gi sandbox), the service logs a warning at
+  startup, because a full sandbox can still run out of memory. A limit larger than the whole
+  sandbox is rejected.
+* **Fails closed.** The cgroup setup runs at the start of every turn, because cgroups live in
+  memory and a disk-mode suspend and resume loses them. If it fails, the turn fails; it never
+  runs unlimited. When a sandbox is created the same requirements are checked (cgroup v2 mounted,
+  the needed controllers, a writable hierarchy), and a sandbox that cannot enforce the limits is
+  deleted and never registered. Then use `ulimit` or `none`.
+* Environment variables: `SANDBOX_MUX_LIMITS_MODE`, `SANDBOX_MUX_USER_CPU`,
+  `SANDBOX_MUX_USER_MEMORY`, `SANDBOX_MUX_USER_PIDS`.
+
+Not verified: whether the sandbox's kernel exposes a writable cgroup v2 hierarchy to the exec
+user. The generated scripts are tested against a fake cgroup directory and syntax-checked, not
+run in a real sandbox. The creation-time check exists so this fails loudly on the first sandbox.
+Not done: per-user disk quotas and I/O limits, per-user network limits, reporting each user's
+peak usage as metrics.
+
+## Network isolation and egress
+
+Outbound access is set per pool with `pool.egress` and applied to each sandbox when it is
+created (`egress_policy` on sandbox creation):
+
+| `egress.mode` | Outbound HTTP/HTTPS |
+|---|---|
+| `disabled` (default) | Denied. The agent has no internet |
+| `allowlist` | Denied except hosts in `allow_hosts` (`example.com`, `*.example.com`) |
+| `enabled` | Allowed |
+| `platform_default` | No policy sent: you get whatever the service defaults to |
+
+I use explicit modes because the sources disagree on the service default (Microsoft's overview
+says unrestricted without a policy, one news article says deny). Do not rely on it.
+`SANDBOX_MUX_EGRESS_MODE` and `SANDBOX_MUX_EGRESS_ALLOW_HOSTS` set these from the environment.
+`audit_only` logs what a policy would block without blocking, which helps when building an
+allowlist.
+
+**Changing the setting takes effect on running sandboxes.** Each sandbox is registered with the
+fingerprint of the policy it was created under. The reaper leader applies the current policy
+to any sandbox whose fingerprint differs (`set_egress_policy`) and retries on failure. So
+switching `enabled` to `disabled` closes existing sandboxes within one sweep (30 seconds by
+default), not only new ones. `platform_default` cannot undo an earlier policy.
+
+If `obo.enabled`, egress `disabled` is rejected at startup, because the agent could not reach
+the downstream APIs. Use `allowlist` with their hosts (for example `graph.microsoft.com`).
+
+What this does not give you, and what I could not verify:
+
+* **Egress policy is per sandbox, not per user.** All users on a sandbox share it. Different
+  network permissions per user need different pools, which means separate service instances
+  with different `pool.name` and egress settings.
+* **Sandbox-to-sandbox traffic.** I found nothing in the public docs saying whether two
+  sandboxes in one group can reach each other over the network. Test it: from one sandbox,
+  try to connect to another's address. Denying egress is the control this project uses, but I
+  have not confirmed that it covers east-west traffic. For hard separation use a separate
+  sandbox group (and VNet, one subnet per group) for each trust boundary.
+* **No inbound by design.** The manager never adds sandbox ports; all access is exec and file
+  calls through the data plane.
+* **Raw TCP/UDP.** `block_non_http` sets the transport default to deny. It is off by default
+  because I could not confirm that HTTPS through the egress proxy still works with it on. The
+  SDK's transport rules need a single destination port per rule, so "block this CIDR on all
+  ports" cannot be expressed; private ranges are not blocked individually.
+* **Not run against the service.** The policy objects are built with the real SDK models and
+  pass its validator, and the wiring is tested with stubs. No sandbox has been created with
+  these policies.
+
+## On-Behalf-Of: acting as the signed-in user
+
+With `obo.enabled`, a request can ask for delegated tokens, and the agent process (which
+already runs as that user's Unix account) can call downstream APIs as that Entra user:
+
+```http
+POST /v1/agent/invoke
+Authorization: Bearer <user token, audience = this service's app registration>
+
+{"prompt": "...", "obo_resources": ["graph"]}
+```
+
+1. The user's token is validated as usual, then exchanged with Entra's On-Behalf-Of flow
+   (MSAL `acquire_token_on_behalf_of`) for each requested alias in `obo.resources`.
+   Callers name aliases, never raw scopes, and at most `max_resources_per_turn` per request.
+2. The tokens are written to `$HOME/.agent/obo.json` with mode `0600`, owned by the user,
+   and the path is passed as `OBO_TOKENS_FILE`. They are not put in the command line or
+   environment (other users could see those), not stored in Redis, and not logged.
+3. The file is deleted right after the turn, including when the agent fails. If the delete
+   fails the error is logged, and the file remains readable by that user only until the
+   token expires or the session is wiped.
+4. If the exchange needs consent or step-up authentication, the API returns 403 with the
+   `X-Claims-Challenge` header and does not take a sandbox slot. Entra's error text is not
+   echoed to the caller.
+
+Which header? I could not confirm a Foundry-specific OBO header in the public docs. Sources
+disagree on whether Foundry's proxy forwards the user's token to the container at all, and
+`x-ms-user-isolation-key` only scopes per-user resources: it is not a delegated token. So
+the header is configurable (`obo.assertion_header`, default `Authorization`). If your front
+end forwards the user token under another name, set that name. A token in a different
+header from the one authenticated must belong to the same `oid` and tenant, or the request
+is rejected.
+
+Limits to be aware of:
+
+* The agent process, and anything it runs, can use and exfiltrate the token while the turn
+  runs. OBO narrows what it can do to what that user may do and what `obo.resources` allows;
+  it does not stop a misbehaving agent from misusing that access.
+* OBO requires `isolation.mode: unix_user` and `auth.mode: entra`; the config refuses to
+  start otherwise. With `home_only`, users share one UID and could read each other's tokens.
+* Egress policy is still per sandbox, so network access is shared even though identity is not.
+* The exchange needs a confidential client: a secret (`OBO_CLIENT_SECRET`), a certificate,
+  or a managed identity as a federated credential (`credential: managed_identity`, no secret
+  to rotate). The app registration needs the downstream delegated permissions and consent.
+* `obo_token(alias)` in `runner/run_turn.py` shows how an agent reads a token.
+
+## Timeouts and environment variables
+
+Foundry hosted sessions have a 15-minute idle timeout that the public docs describe as a
+platform behaviour, not a setting. Here every timeout is configurable, in the YAML file or
+from the environment (the environment wins). Values are validated at startup.
+
+| Variable | Setting | Effect |
+|---|---|---|
+| `SANDBOX_MUX_IDLE_TIMEOUT_SECONDS` | `pool.auto_suspend_seconds` | Platform suspends an idle sandbox (state kept, compute billing stops). Default 900 |
+| `SANDBOX_MUX_SESSION_TTL_SECONDS` | `session.user_idle_ttl_seconds` | Remove a user's session after this long idle: unbind, delete home. Default 3600 |
+| `SANDBOX_MUX_EMPTY_SANDBOX_TTL_SECONDS` | `pool.empty_ttl_seconds` | Delete a sandbox with no users (above `min_sandboxes`). Default 600 |
+| `SANDBOX_MUX_HISTORY_TTL_SECONDS` | `session.history_ttl_seconds` | Expire stored conversations. Default 7 days |
+| `SANDBOX_MUX_TURN_TIMEOUT_SECONDS` | `session.turn_timeout_seconds` | Kill a running agent turn |
+| `SANDBOX_MUX_QUEUE_TIMEOUT_SECONDS` | `session.queue_timeout_seconds` | Wait for capacity before HTTP 429 |
+| `SANDBOX_MUX_MIN_SANDBOXES`, `_MAX_SANDBOXES`, `_USERS_PER_SANDBOX` | `pool.*` | Pool shape |
+| `SANDBOX_MUX_CPU`, `_MEMORY`, `_DISK_SIZE` | `pool.cpu`, `pool.memory`, `pool.disk_size` | Size of each sandbox, e.g. `2` or `2000m`, `4Gi`, `20Gi`. Shared by all users on it, so size for `users_per_sandbox`. Applied at creation |
+| `SANDBOX_MUX_EGRESS_MODE`, `_EGRESS_ALLOW_HOSTS` | `pool.egress.*` | Outbound network policy (see Network isolation) |
+| `SANDBOX_MUX__<SECTION>__<KEY>` | any setting | e.g. `SANDBOX_MUX__POOL__STRATEGY=spread` |
+
+These variables can also be put in a `.env` file in the working directory (or the path in
+`SANDBOX_MUX_ENV_FILE`); real environment variables take precedence. Only `SANDBOX_MUX*`,
+`REDIS_URL` and `OBO_CLIENT_SECRET` are read from it.
+
+The idle timeout, CPU, memory and disk are applied when a sandbox is created, so existing
+sandboxes keep their old values until they are replaced. The group's `maxSandboxCount` and
+your subscription quota still cap the total.
+
+## Layout
+
+| Path | Purpose |
+|---|---|
+| `src/sandbox_mux/store.py` | Redis state and the atomic placement scripts |
+| `src/sandbox_mux/pool.py` | Acquire a slot, create and bootstrap sandboxes, warm pool |
+| `src/sandbox_mux/service.py` | One turn: lock, place, resume, provision user, run agent, persist history |
+| `src/sandbox_mux/reaper.py` | Leader-elected eviction, draining, reconciliation |
+| `src/sandbox_mux/backends/azure.py` | The only module that uses the sandbox SDK |
+| `src/sandbox_mux/backends/fake.py` | In-memory backend for tests and local dev |
+| `src/sandbox_mux/files.py`, `blobs.py` | User files: quota, names, safe archive handling; Azure Blob and local stores |
+| `src/sandbox_mux/obo.py` | Entra On-Behalf-Of exchange |
+| `src/sandbox_mux/api.py` | FastAPI app: invoke, history, end session, pool status |
+| `runner/run_turn.py` | Example in-sandbox agent runner and its contract |
+| `infra/main.bicep` | Sandbox group, optional VNet connection, data-plane role assignment |
+| `config.example.yaml` | All settings |
+
+## Run it
+
+```bash
+pip install -e ".[dev]" && pytest                       # no Azure or Redis needed
+cp config.example.yaml config.yaml                      # fill in the azure section
+export REDIS_URL=rediss://...
+az login                                                # or use a managed identity
+python -m sandbox_mux.main
+```
+
+Prerequisites in Azure:
+
+1. Deploy `infra/main.bicep`, giving it the object ID of the identity the manager runs as
+   (it gets *Container Apps SandboxGroup Data Owner*).
+2. Build a sandbox disk image that contains the agent runner (see `runner/run_turn.py` for
+   the contract) and set `pool.disk_id`. Exec must run as root inside the sandbox: the
+   bootstrap check fails the sandbox otherwise.
+3. Set `auth.tenant_id` and `auth.audience` to your Entra app registration. Dev mode
+   (`X-Dev-User` header) trusts the caller and is for local use only.
+
+## API
+
+| Method and path | Meaning |
+|---|---|
+| `POST /v1/agent/invoke` `{conversation_id, prompt, obo_resources}` | Run a turn. 409 if the user already has one running, 429 if the pool is full, 403 if OBO needs consent |
+| `GET /v1/conversations/{id}/messages` | Stored history |
+| `DELETE /v1/me/session` | Release the slot and delete the user's home |
+| `POST /v1/files?name=`, `GET /v1/files`, `GET /v1/files/{id}`, `GET /v1/files/{id}/metadata`, `DELETE /v1/files/{id}` | Files (see above) |
+| `GET /v1/pool/status` | Loads, states, in-flight creations, waiters (admin OIDs only) |
+| `GET /healthz`, `GET /readyz` | Liveness and Redis readiness |
+
+## Known limits and things to verify
+
+* **Preview SDK.** `azure-containerapps-sandbox` is a community preview (1.0.0b1) and the
+  API version is `2026-09-01-preview`. The calls used (`SandboxGroupClient`,
+  `begin_create_sandbox`, `get_sandbox_client(...).exec/write_file/ensure_running`,
+  `list_sandboxes`, `delete_sandbox`) were checked against the installed package, but the
+  behaviour against a live service has not been tested. All of it is confined to
+  `backends/azure.py`.
+* **OBO is tested with a fake MSAL app, not against Entra.** The exchange, consent and claims-challenge handling follow MSAL's documented result shape but have not been run against a tenant.
+* **Not tested against real Azure.** The test suite uses the in-memory backend and
+  fakeredis. The in-sandbox commands (`useradd`, `runuser`, `hidepid`) are built and
+  checked for shape, not executed.
+* **Egress and secrets.** Egress policy is per sandbox and shared by its users. Do not put
+  model keys in the image or agent environment; use the group's egress credential injection
+  or a gateway. This project sets allow/deny egress policies but does not configure
+  credential injection.
+* **Waiting uses polling** with jittered backoff, not Redis pub/sub.
+* **Redis Cluster** is not supported: the Lua scripts touch keys that do not share a hash
+  slot. Use a single primary (Azure Cache for Redis Standard/Premium, non-clustered).
+* **Exec output size and runaway processes** rely on `timeout` inside the sandbox and the
+  overall `turn_timeout_seconds`. Per-user CPU, memory and process limits are available
+  (`limits`) but off by default. There are no per-user disk quotas.
